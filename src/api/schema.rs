@@ -450,6 +450,8 @@ pub enum Subscription {
     WorkspaceClosed {},
     #[serde(rename = "workspace.focused")]
     WorkspaceFocused {},
+    #[serde(rename = "workspace.files_changed")]
+    WorkspaceFilesChanged {},
     #[serde(rename = "tab.created")]
     TabCreated {},
     #[serde(rename = "tab.closed")]
@@ -614,6 +616,7 @@ pub enum EventKind {
     WorkspaceClosed,
     WorkspaceRenamed,
     WorkspaceFocused,
+    WorkspaceFilesChanged,
     TabCreated,
     TabClosed,
     TabRenamed,
@@ -943,6 +946,15 @@ pub struct PaneAgentStatusChangedEvent {
     pub state_labels: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilesChangedKind {
+    pub modified: bool,
+    pub created: bool,
+    pub deleted: bool,
+    pub renamed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventData {
@@ -961,6 +973,11 @@ pub enum EventData {
     },
     WorkspaceFocused {
         workspace_id: String,
+    },
+    WorkspaceFilesChanged {
+        workspace_id: String,
+        paths: Vec<String>,
+        kind: FilesChangedKind,
     },
     TabCreated {
         tab: TabInfo,
@@ -1302,6 +1319,52 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let restored: EventEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, event);
+    }
+
+    #[test]
+    fn workspace_files_changed_event_round_trips() {
+        let event = EventEnvelope {
+            event: EventKind::WorkspaceFilesChanged,
+            data: EventData::WorkspaceFilesChanged {
+                workspace_id: "w_1".into(),
+                paths: vec!["src/main.rs".into(), ".git/HEAD".into()],
+                kind: FilesChangedKind {
+                    modified: true,
+                    created: false,
+                    deleted: false,
+                    renamed: false,
+                },
+            },
+        };
+
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"workspace_files_changed\""));
+        let restored: EventEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, event);
+    }
+
+    #[test]
+    fn workspace_files_changed_subscription_parses() {
+        let json = r#"
+        {
+            "id": "sub_1",
+            "method": "events.subscribe",
+            "params": {
+                "subscriptions": [
+                    { "type": "workspace.files_changed" }
+                ]
+            }
+        }
+        "#;
+
+        let request: Request = serde_json::from_str(json).unwrap();
+        let Method::EventsSubscribe(params) = request.method else {
+            panic!("wrong method parsed");
+        };
+        assert!(matches!(
+            params.subscriptions[0],
+            Subscription::WorkspaceFilesChanged {}
+        ));
     }
 
     #[test]

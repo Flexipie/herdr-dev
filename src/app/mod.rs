@@ -300,6 +300,7 @@ impl App {
                 event_tx.clone(),
                 render_notify.clone(),
                 render_dirty.clone(),
+                event_hub.clone(),
             );
             restored_terminals = terminals;
             restored_terminal_runtimes = terminal_runtimes.into();
@@ -628,6 +629,7 @@ impl App {
             app.event_tx.clone(),
             app.render_notify.clone(),
             app.render_dirty.clone(),
+            app.event_hub.clone(),
         )?;
         let pane_id_aliases = crate::persist::handoff_pane_aliases(snapshot, &workspaces);
 

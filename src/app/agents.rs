@@ -326,6 +326,7 @@ impl App {
             self.event_tx.clone(),
             self.render_notify.clone(),
             self.render_dirty.clone(),
+            self.event_hub.clone(),
         )
         .map_err(|err| AgentStartError::SpawnFailed(err.to_string()))?;
         self.terminal_runtimes.insert(terminal.id.clone(), runtime);

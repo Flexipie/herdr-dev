@@ -61,6 +61,7 @@ type RestoredTab = (
 type RestoreFailures<T> = (T, usize);
 
 /// Restore workspaces from a snapshot. Each pane gets a fresh shell in its saved cwd.
+#[allow(clippy::too_many_arguments)]
 pub fn restore(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -73,6 +74,7 @@ pub fn restore(
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<AtomicBool>,
+    event_hub: crate::api::EventHub,
 ) -> RestoredSession {
     let mut imported_panes = HashMap::new();
     restore_with_imports(
@@ -87,10 +89,12 @@ pub fn restore(
         events,
         render_notify,
         render_dirty,
+        event_hub,
     )
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 pub fn restore_handoff(
     snapshot: &SessionSnapshot,
     scrollback_limit_bytes: usize,
@@ -100,6 +104,7 @@ pub fn restore_handoff(
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<AtomicBool>,
+    event_hub: crate::api::EventHub,
 ) -> std::io::Result<RestoredSession> {
     restore_with_imports_strict(
         snapshot,
@@ -113,6 +118,7 @@ pub fn restore_handoff(
         events,
         render_notify,
         render_dirty,
+        event_hub,
     )
 }
 
@@ -155,6 +161,7 @@ fn collect_snapshot_ids_inner(node: &LayoutSnapshot, ids: &mut Vec<u32>) {
 }
 
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 fn restore_with_imports_strict(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -167,6 +174,7 @@ fn restore_with_imports_strict(
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<AtomicBool>,
+    event_hub: crate::api::EventHub,
 ) -> std::io::Result<RestoredSession> {
     let (restored, failed_imports) = restore_with_imports_and_failures(
         snapshot,
@@ -180,6 +188,7 @@ fn restore_with_imports_strict(
         events,
         render_notify,
         render_dirty,
+        event_hub,
     );
     if failed_imports > 0 {
         return Err(std::io::Error::other(format!(
@@ -195,6 +204,7 @@ fn restore_with_imports_strict(
     Ok(restored)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn restore_with_imports(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -207,6 +217,7 @@ fn restore_with_imports(
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<AtomicBool>,
+    event_hub: crate::api::EventHub,
 ) -> RestoredSession {
     restore_with_imports_and_failures(
         snapshot,
@@ -220,10 +231,12 @@ fn restore_with_imports(
         events,
         render_notify,
         render_dirty,
+        event_hub,
     )
     .0
 }
 
+#[allow(clippy::too_many_arguments)]
 fn restore_with_imports_and_failures(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -236,6 +249,7 @@ fn restore_with_imports_and_failures(
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<AtomicBool>,
+    event_hub: crate::api::EventHub,
 ) -> RestoreFailures<RestoredSession> {
     let mut workspaces = Vec::new();
     let mut terminals = HashMap::new();
@@ -261,11 +275,12 @@ fn restore_with_imports_and_failures(
             imported_panes,
         );
         failed_imports += workspace_failed_imports;
-        if let Some((workspace, restored_terminals, restored_runtimes)) = restored {
+        if let Some((mut workspace, restored_terminals, restored_runtimes)) = restored {
             for terminal in restored_terminals {
                 terminals.insert(terminal.id.clone(), terminal);
             }
             terminal_runtimes.extend(restored_runtimes);
+            workspace.install_watcher(event_hub.clone());
             workspaces.push(workspace);
         }
     }
@@ -334,6 +349,7 @@ fn restore_workspace(
             next_public_pane_number,
             active_tab: snap.active_tab.min(tabs.len().saturating_sub(1)),
             tabs,
+            watcher: None,
             #[cfg(test)]
             test_runtimes: HashMap::new(),
         })
@@ -1053,6 +1069,7 @@ mod tests {
             events,
             Arc::new(Notify::new()),
             Arc::new(AtomicBool::new(false)),
+            crate::api::EventHub::default(),
         );
 
         let terminal = terminals
@@ -1128,6 +1145,7 @@ mod tests {
             events,
             Arc::new(Notify::new()),
             Arc::new(AtomicBool::new(false)),
+            crate::api::EventHub::default(),
         );
 
         let terminal = terminals
@@ -1156,6 +1174,7 @@ mod tests {
             mpsc::channel(4).0,
             Arc::new(Notify::new()),
             Arc::new(AtomicBool::new(false)),
+            crate::api::EventHub::default(),
         )
         .expect("handoff restore should preserve pending native agent resume");
         let handoff_terminal = handoff_terminals
@@ -1191,6 +1210,7 @@ mod tests {
             events,
             render_notify,
             render_dirty,
+            crate::api::EventHub::default(),
         );
         let runtime = runtimes
             .values()
@@ -1230,6 +1250,7 @@ mod tests {
             events,
             render_notify,
             render_dirty,
+            crate::api::EventHub::default(),
         );
         let runtime = runtimes
             .values()

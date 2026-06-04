@@ -1925,6 +1925,7 @@ last_pane = "prefix+tab"
             app.event_tx.clone(),
             app.render_notify.clone(),
             app.render_dirty.clone(),
+            app.event_hub.clone(),
         )
         .expect("workspace should spawn");
         let root_pane = workspace.tabs[0].root_pane;

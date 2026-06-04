@@ -18,6 +18,7 @@ use crate::terminal::{TerminalId, TerminalRuntime, TerminalRuntimeRegistry, Term
 mod aggregate;
 mod git;
 mod tab;
+mod watch;
 
 #[cfg(test)]
 use self::git::git_ahead_behind;
@@ -28,6 +29,8 @@ pub use self::{
     },
     tab::Tab,
 };
+
+use self::watch::WorkspaceWatcher;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WorktreeSpaceMembership {
@@ -103,6 +106,9 @@ pub struct Workspace {
     pub(crate) next_public_pane_number: usize,
     pub tabs: Vec<Tab>,
     pub active_tab: usize,
+    // Alive via Drop side-effect: aborts the per-workspace fs watcher thread.
+    #[allow(dead_code)]
+    pub(crate) watcher: Option<WorkspaceWatcher>,
     #[cfg(test)]
     pub(crate) test_runtimes: HashMap<PaneId, TerminalRuntime>,
 }
@@ -124,6 +130,7 @@ impl DerefMut for Workspace {
 }
 
 impl Workspace {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         initial_cwd: PathBuf,
         rows: u16,
@@ -134,6 +141,7 @@ impl Workspace {
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<AtomicBool>,
+        event_hub: crate::api::EventHub,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
         Self::new_with_tab(
             initial_cwd,
@@ -145,10 +153,12 @@ impl Workspace {
             events,
             render_notify,
             render_dirty,
+            event_hub,
             None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_argv_command(
         initial_cwd: PathBuf,
         rows: u16,
@@ -159,6 +169,7 @@ impl Workspace {
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<AtomicBool>,
+        event_hub: crate::api::EventHub,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
         Self::new_with_tab(
             initial_cwd,
@@ -170,6 +181,7 @@ impl Workspace {
             events,
             render_notify,
             render_dirty,
+            event_hub,
             Some(argv),
         )
     }
@@ -188,6 +200,7 @@ impl Workspace {
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<AtomicBool>,
+        event_hub: crate::api::EventHub,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
         let (tab, terminal, runtime) = Tab::new_argv_command_with_env(
             1,
@@ -205,6 +218,11 @@ impl Workspace {
         )?;
         let mut public_pane_numbers = HashMap::new();
         public_pane_numbers.insert(tab.root_pane, 1);
+        let watcher = Some(WorkspaceWatcher::spawn(
+            workspace_id.clone(),
+            initial_cwd.clone(),
+            event_hub,
+        ));
         Ok((
             Self {
                 id: workspace_id,
@@ -218,6 +236,7 @@ impl Workspace {
                 next_public_pane_number: 2,
                 tabs: vec![tab],
                 active_tab: 0,
+                watcher,
                 #[cfg(test)]
                 test_runtimes: HashMap::new(),
             },
@@ -237,6 +256,7 @@ impl Workspace {
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<AtomicBool>,
+        event_hub: crate::api::EventHub,
         argv: Option<&[String]>,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
         let (tab, terminal, runtime) = if let Some(argv) = argv {
@@ -268,9 +288,15 @@ impl Workspace {
         };
         let mut public_pane_numbers = HashMap::new();
         public_pane_numbers.insert(tab.root_pane, 1);
+        let id = generate_workspace_id();
+        let watcher = Some(WorkspaceWatcher::spawn(
+            id.clone(),
+            initial_cwd.clone(),
+            event_hub,
+        ));
         Ok((
             Self {
-                id: generate_workspace_id(),
+                id,
                 custom_name: None,
                 identity_cwd: initial_cwd.clone(),
                 cached_git_branch: git_branch(&initial_cwd),
@@ -281,12 +307,23 @@ impl Workspace {
                 next_public_pane_number: 2,
                 tabs: vec![tab],
                 active_tab: 0,
+                watcher,
                 #[cfg(test)]
                 test_runtimes: HashMap::new(),
             },
             terminal,
             runtime,
         ))
+    }
+
+    /// Attach a per-workspace filesystem watcher rooted at `identity_cwd`.
+    /// Replaces any existing watcher (its task is aborted on drop).
+    pub(crate) fn install_watcher(&mut self, event_hub: crate::api::EventHub) {
+        self.watcher = Some(WorkspaceWatcher::spawn(
+            self.id.clone(),
+            self.identity_cwd.clone(),
+            event_hub,
+        ));
     }
 
     pub fn active_tab(&self) -> Option<&Tab> {
@@ -809,6 +846,7 @@ impl Workspace {
             next_public_pane_number: 2,
             tabs: vec![tab],
             active_tab: 0,
+            watcher: None,
             test_runtimes: HashMap::new(),
         }
     }

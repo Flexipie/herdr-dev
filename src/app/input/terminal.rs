@@ -850,6 +850,7 @@ mod tests {
             app.event_tx.clone(),
             app.render_notify.clone(),
             app.render_dirty.clone(),
+            app.event_hub.clone(),
         )
         .expect("workspace should spawn");
         app.state.workspaces = vec![workspace];

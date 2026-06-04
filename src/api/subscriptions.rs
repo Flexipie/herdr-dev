@@ -128,6 +128,10 @@ impl ActiveSubscription {
                 event_kind: crate::api::schema::EventKind::WorkspaceFocused,
                 last_sequence: 0,
             })),
+            Subscription::WorkspaceFilesChanged {} => Ok(Self::Event(ActiveEventSubscription {
+                event_kind: crate::api::schema::EventKind::WorkspaceFilesChanged,
+                last_sequence: 0,
+            })),
             Subscription::TabCreated {} => Ok(Self::Event(ActiveEventSubscription {
                 event_kind: crate::api::schema::EventKind::TabCreated,
                 last_sequence: 0,

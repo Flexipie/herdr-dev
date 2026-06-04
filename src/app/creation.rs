@@ -161,6 +161,7 @@ impl App {
                 self.event_tx.clone(),
                 self.render_notify.clone(),
                 self.render_dirty.clone(),
+                self.event_hub.clone(),
             )?
         } else {
             Workspace::new(
@@ -173,6 +174,7 @@ impl App {
                 self.event_tx.clone(),
                 self.render_notify.clone(),
                 self.render_dirty.clone(),
+                self.event_hub.clone(),
             )?
         };
         self.terminal_runtimes.insert(terminal.id.clone(), runtime);
