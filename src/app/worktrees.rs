@@ -364,7 +364,7 @@ impl App {
             return;
         }
 
-        match self.create_workspace_with_options(entry.path.clone(), true) {
+        match self.create_workspace_with_options(entry.path.clone(), true, None) {
             Ok(new_ws_idx) => {
                 self.mark_opened_existing_worktree_membership(
                     &source_workspace_id,
@@ -596,7 +596,15 @@ impl App {
                 self.state.worktree_create = None;
                 self.state.name_input.clear();
                 self.state.name_input_replace_on_type = false;
-                match self.create_workspace_with_options(path.clone(), true) {
+                let launch =
+                    crate::worktree::worktree_setup_launch(&path, &source_repo_root).map(|setup| {
+                        crate::app::creation::WorkspaceLaunchSpec {
+                            argv: setup.argv,
+                            command: "./worktree_setup.sh".into(),
+                            partial_env: setup.env,
+                        }
+                    });
+                match self.create_workspace_with_options(path.clone(), true, launch) {
                     Ok(ws_idx) => {
                         let source_membership = source_existing_membership.unwrap_or(
                             crate::workspace::WorktreeSpaceMembership {
@@ -1070,6 +1078,129 @@ mod tests {
         let remove_source =
             crate::worktree::build_worktree_remove_command(&repo, &source_checkout, false);
         crate::worktree::run_worktree_command(&remove_source).unwrap();
+        let _ = std::fs::remove_dir_all(worktree_root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn worktree_add_with_tracked_executable_setup_script_sets_launch_argv() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = create_committed_repo("app-worktree-setup-script-repo");
+        let worktree_root = unique_temp_path("app-worktree-setup-script-root");
+        let branch = "worktree/setup-tracked";
+        let checkout = crate::worktree::default_checkout_path(&worktree_root, "herdr", branch);
+
+        let add = crate::worktree::build_worktree_add_new_branch_command(
+            &repo, &checkout, branch, "HEAD",
+        );
+        crate::worktree::run_worktree_command(&add).unwrap();
+
+        let script_path = checkout.join("worktree_setup.sh");
+        std::fs::write(&script_path, "#!/usr/bin/env bash\necho setup\n").unwrap();
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        run_git(&checkout, &["add", "worktree_setup.sh"]);
+        run_git(&checkout, &["commit", "--quiet", "-m", "add setup"]);
+
+        let mut app = app_for_worktree_tests();
+        app.state.default_shell = "/usr/bin/true".into();
+        app.state.worktree_directory = worktree_root.clone();
+        app.state.worktree_create = Some(WorktreeCreateState {
+            source_workspace_id: "source".into(),
+            source_checkout_path: repo.clone(),
+            source_existing_membership: None,
+            source_repo_root: repo.clone(),
+            repo_key: "repo-key".into(),
+            repo_name: "herdr".into(),
+            branch: branch.into(),
+            checkout_path: checkout.clone(),
+            error: None,
+            creating: true,
+        });
+
+        app.handle_worktree_add_finished(WorktreeAddResult {
+            path: checkout.clone(),
+            result: Ok(()),
+        });
+
+        let ws = app
+            .state
+            .workspaces
+            .iter()
+            .find(|ws| ws.identity_cwd == checkout)
+            .expect("setup script worktree should create new workspace");
+        let root_pane = ws.tabs[0].root_pane;
+        let terminal_id = ws.tabs[0].terminal_id(root_pane).unwrap().clone();
+        let terminal = app
+            .state
+            .terminals
+            .get(&terminal_id)
+            .expect("terminal for new workspace root pane should exist");
+        assert_eq!(
+            terminal.launch_argv.as_deref(),
+            Some(["./worktree_setup.sh".to_string()].as_slice())
+        );
+        assert!(terminal.respawn_shell_on_exit);
+
+        let remove = crate::worktree::build_worktree_remove_command(&repo, &checkout, true);
+        let _ = crate::worktree::run_worktree_command(&remove);
+        let _ = std::fs::remove_dir_all(worktree_root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn worktree_add_without_tracked_setup_script_leaves_default_shell() {
+        let repo = create_committed_repo("app-worktree-no-setup-script-repo");
+        let worktree_root = unique_temp_path("app-worktree-no-setup-script-root");
+        let branch = "worktree/no-setup";
+        let checkout = crate::worktree::default_checkout_path(&worktree_root, "herdr", branch);
+
+        let add = crate::worktree::build_worktree_add_new_branch_command(
+            &repo, &checkout, branch, "HEAD",
+        );
+        crate::worktree::run_worktree_command(&add).unwrap();
+
+        let mut app = app_for_worktree_tests();
+        app.state.default_shell = "/usr/bin/true".into();
+        app.state.worktree_directory = worktree_root.clone();
+        app.state.worktree_create = Some(WorktreeCreateState {
+            source_workspace_id: "source".into(),
+            source_checkout_path: repo.clone(),
+            source_existing_membership: None,
+            source_repo_root: repo.clone(),
+            repo_key: "repo-key".into(),
+            repo_name: "herdr".into(),
+            branch: branch.into(),
+            checkout_path: checkout.clone(),
+            error: None,
+            creating: true,
+        });
+
+        app.handle_worktree_add_finished(WorktreeAddResult {
+            path: checkout.clone(),
+            result: Ok(()),
+        });
+
+        let ws = app
+            .state
+            .workspaces
+            .iter()
+            .find(|ws| ws.identity_cwd == checkout)
+            .expect("worktree without setup script should still create workspace");
+        let root_pane = ws.tabs[0].root_pane;
+        let terminal_id = ws.tabs[0].terminal_id(root_pane).unwrap().clone();
+        let terminal = app
+            .state
+            .terminals
+            .get(&terminal_id)
+            .expect("terminal for new workspace root pane should exist");
+        assert!(terminal.launch_argv.is_none());
+        assert!(!terminal.respawn_shell_on_exit);
+
+        let remove = crate::worktree::build_worktree_remove_command(&repo, &checkout, false);
+        let _ = crate::worktree::run_worktree_command(&remove);
         let _ = std::fs::remove_dir_all(worktree_root);
         let _ = std::fs::remove_dir_all(repo);
     }

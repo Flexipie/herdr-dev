@@ -101,6 +101,62 @@ impl Tab {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn new_argv_command_with_env(
+        number: usize,
+        initial_cwd: PathBuf,
+        rows: u16,
+        cols: u16,
+        command: &str,
+        extra_env: &[(String, String)],
+        launch_argv_for_restore: &[String],
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<AtomicBool>,
+    ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
+        let (layout, root_id) = TileLayout::new();
+        let runtime = TerminalRuntime::spawn_shell_command(
+            root_id,
+            rows,
+            cols,
+            initial_cwd.clone(),
+            command,
+            extra_env,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            events.clone(),
+            render_notify.clone(),
+            render_dirty.clone(),
+        )?;
+
+        let terminal_id = TerminalId::alloc();
+        let terminal = TerminalState::new(terminal_id.clone(), initial_cwd)
+            .with_launch_argv(launch_argv_for_restore.to_vec())
+            .with_respawn_shell_on_exit();
+        let mut panes = HashMap::new();
+        panes.insert(root_id, PaneState::new(terminal_id));
+
+        Ok((
+            Self {
+                custom_name: None,
+                number,
+                root_pane: root_id,
+                layout,
+                panes,
+                #[cfg(test)]
+                runtimes: HashMap::new(),
+                zoomed: false,
+                events,
+                render_notify,
+                render_dirty,
+            },
+            terminal,
+            runtime,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn new_with_runtime(
         number: usize,
         initial_cwd: PathBuf,

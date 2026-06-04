@@ -126,16 +126,25 @@ impl App {
             return encode_error(id, err.code, err.message);
         }
 
-        let ws_idx = match self.create_workspace_with_options(checkout_path.clone(), params.focus) {
-            Ok(ws_idx) => ws_idx,
-            Err(err) => {
-                return encode_error(
-                    id,
-                    "worktree_open_failed",
-                    format!("created worktree but failed to open workspace: {err}"),
-                );
-            }
-        };
+        let launch =
+            crate::worktree::worktree_setup_launch(&checkout_path, &source.source_repo_root).map(
+                |setup| crate::app::creation::WorkspaceLaunchSpec {
+                    argv: setup.argv,
+                    command: "./worktree_setup.sh".into(),
+                    partial_env: setup.env,
+                },
+            );
+        let ws_idx =
+            match self.create_workspace_with_options(checkout_path.clone(), params.focus, launch) {
+                Ok(ws_idx) => ws_idx,
+                Err(err) => {
+                    return encode_error(
+                        id,
+                        "worktree_open_failed",
+                        format!("created worktree but failed to open workspace: {err}"),
+                    );
+                }
+            };
         self.mark_worktree_membership(&source, ws_idx, checkout_path, true, false);
         if let Some(label) = params.label {
             if let Some(ws) = self.state.workspaces.get_mut(ws_idx) {
@@ -210,7 +219,7 @@ impl App {
             }
             (ws_idx, created_source_workspace)
         } else {
-            match self.create_workspace_with_options(entry.path.clone(), params.focus) {
+            match self.create_workspace_with_options(entry.path.clone(), params.focus, None) {
                 Ok(ws_idx) => (ws_idx, true),
                 Err(err) => return encode_error(id, "worktree_open_failed", err.to_string()),
             }
@@ -552,7 +561,7 @@ impl App {
         let mut created_parent = false;
         if source.workspace_idx.is_none() {
             let ws_idx = self
-                .create_workspace_with_options(source.source_checkout_path.clone(), false)
+                .create_workspace_with_options(source.source_checkout_path.clone(), false, None)
                 .map_err(|err| ApiFailure::new("worktree_open_failed", err.to_string()))?;
             source.workspace_idx = Some(ws_idx);
             created_parent = true;

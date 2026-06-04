@@ -136,6 +136,72 @@ pub(crate) fn build_worktree_add_new_branch_command(
     }
 }
 
+pub(crate) struct WorktreeSetupLaunch {
+    pub argv: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+const WORKTREE_SETUP_SCRIPT: &str = "worktree_setup.sh";
+
+#[cfg(unix)]
+pub(crate) fn worktree_setup_launch(
+    worktree_root: &Path,
+    source_repo_root: &Path,
+) -> Option<WorktreeSetupLaunch> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = worktree_root.join(WORKTREE_SETUP_SCRIPT);
+
+    let ls_files = std::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree_root)
+        .args(["ls-files", "--error-unmatch", "--", WORKTREE_SETUP_SCRIPT])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    let tracked = matches!(ls_files, Ok(status) if status.success());
+    if !tracked {
+        tracing::info!(
+            worktree = %worktree_root.display(),
+            "worktree_setup.sh not tracked, skipping",
+        );
+        return None;
+    }
+
+    let executable = std::fs::metadata(&script_path)
+        .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false);
+    if !executable {
+        tracing::info!(
+            worktree = %worktree_root.display(),
+            "worktree_setup.sh not executable, skipping",
+        );
+        return None;
+    }
+
+    Some(WorktreeSetupLaunch {
+        argv: vec![format!("./{WORKTREE_SETUP_SCRIPT}")],
+        env: vec![
+            (
+                "HERDR_WORKTREE_PATH".to_string(),
+                worktree_root.display().to_string(),
+            ),
+            (
+                "HERDR_SOURCE_REPO_ROOT".to_string(),
+                source_repo_root.display().to_string(),
+            ),
+        ],
+    })
+}
+
+#[cfg(not(unix))]
+pub(crate) fn worktree_setup_launch(
+    _worktree_root: &Path,
+    _source_repo_root: &Path,
+) -> Option<WorktreeSetupLaunch> {
+    None
+}
+
 pub(crate) fn run_worktree_command(command: &WorktreeCommand) -> Result<(), String> {
     let output = std::process::Command::new(&command.program)
         .args(&command.args)

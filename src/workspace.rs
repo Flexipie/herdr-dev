@@ -175,6 +175,58 @@ impl Workspace {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn new_argv_command_with_env(
+        workspace_id: String,
+        initial_cwd: PathBuf,
+        rows: u16,
+        cols: u16,
+        command: &str,
+        extra_env: &[(String, String)],
+        launch_argv_for_restore: &[String],
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<AtomicBool>,
+    ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
+        let (tab, terminal, runtime) = Tab::new_argv_command_with_env(
+            1,
+            initial_cwd.clone(),
+            rows,
+            cols,
+            command,
+            extra_env,
+            launch_argv_for_restore,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            events,
+            render_notify,
+            render_dirty,
+        )?;
+        let mut public_pane_numbers = HashMap::new();
+        public_pane_numbers.insert(tab.root_pane, 1);
+        Ok((
+            Self {
+                id: workspace_id,
+                custom_name: None,
+                identity_cwd: initial_cwd.clone(),
+                cached_git_branch: git_branch(&initial_cwd),
+                cached_git_ahead_behind: None,
+                cached_git_space: None,
+                worktree_space: None,
+                public_pane_numbers,
+                next_public_pane_number: 2,
+                tabs: vec![tab],
+                active_tab: 0,
+                #[cfg(test)]
+                test_runtimes: HashMap::new(),
+            },
+            terminal,
+            runtime,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn new_with_tab(
         initial_cwd: PathBuf,
         rows: u16,

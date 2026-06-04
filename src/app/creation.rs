@@ -8,6 +8,12 @@ use super::{
 };
 use crate::{config::NewTerminalCwdConfig, workspace::Workspace};
 
+pub(crate) struct WorkspaceLaunchSpec {
+    pub argv: Vec<String>,
+    pub command: String,
+    pub partial_env: Vec<(String, String)>,
+}
+
 pub(crate) fn resolve_new_terminal_cwd(
     policy: &NewTerminalCwdConfig,
     follow_cwd: Option<PathBuf>,
@@ -60,7 +66,7 @@ impl App {
             .workspace_creation_source()
             .and_then(|ws_idx| self.seed_cwd_from_workspace(ws_idx));
         let initial_cwd = self.resolve_new_terminal_cwd(follow_cwd);
-        if let Err(e) = self.create_workspace_with_options(initial_cwd, true) {
+        if let Err(e) = self.create_workspace_with_options(initial_cwd, true, None) {
             error!(err = %e, "failed to create workspace");
             self.state.mode = Mode::Navigate;
         }
@@ -100,7 +106,7 @@ impl App {
         focus: bool,
     ) -> std::io::Result<usize> {
         let Some(ws_idx) = self.state.active else {
-            return self.create_workspace_with_options(initial_cwd, focus);
+            return self.create_workspace_with_options(initial_cwd, focus, None);
         };
         let (rows, cols) = self.state.estimate_pane_size();
         let ws = &mut self.state.workspaces[ws_idx];
@@ -134,19 +140,41 @@ impl App {
         &mut self,
         initial_cwd: PathBuf,
         focus: bool,
+        launch: Option<WorkspaceLaunchSpec>,
     ) -> std::io::Result<usize> {
         let (rows, cols) = self.state.estimate_pane_size();
-        let (ws, terminal, runtime) = Workspace::new(
-            initial_cwd,
-            rows,
-            cols,
-            self.state.pane_scrollback_limit_bytes,
-            self.state.host_terminal_theme,
-            crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
-            self.event_tx.clone(),
-            self.render_notify.clone(),
-            self.render_dirty.clone(),
-        )?;
+        let (ws, terminal, runtime) = if let Some(launch) = launch {
+            let workspace_id = crate::workspace::generate_workspace_id();
+            let mut full_env = launch.partial_env;
+            full_env.push(("HERDR_WORKSPACE_ID".into(), workspace_id.clone()));
+            full_env.push(("HERDR_PANE_ID".into(), format!("{workspace_id}-1")));
+            Workspace::new_argv_command_with_env(
+                workspace_id,
+                initial_cwd,
+                rows,
+                cols,
+                &launch.command,
+                &full_env,
+                &launch.argv,
+                self.state.pane_scrollback_limit_bytes,
+                self.state.host_terminal_theme,
+                self.event_tx.clone(),
+                self.render_notify.clone(),
+                self.render_dirty.clone(),
+            )?
+        } else {
+            Workspace::new(
+                initial_cwd,
+                rows,
+                cols,
+                self.state.pane_scrollback_limit_bytes,
+                self.state.host_terminal_theme,
+                crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
+                self.event_tx.clone(),
+                self.render_notify.clone(),
+                self.render_dirty.clone(),
+            )?
+        };
         self.terminal_runtimes.insert(terminal.id.clone(), runtime);
         self.state.terminals.insert(terminal.id.clone(), terminal);
         self.state.workspaces.push(ws);
