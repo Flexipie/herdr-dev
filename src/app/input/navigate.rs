@@ -1013,7 +1013,8 @@ mod tests {
         let mut state = state_with_workspaces(&["stale"]);
         let root = state.workspaces[0].tabs[0].root_pane;
         let terminal_id = state.workspaces[0].panes[&root]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         state.workspaces[0].custom_name = None;
         state.workspaces[0].identity_cwd = "/__herdr_original__".into();

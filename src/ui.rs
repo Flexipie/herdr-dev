@@ -665,7 +665,8 @@ mod tests {
         app.workspaces = vec![ws];
         app.ensure_test_terminals();
         let root_terminal_id = app.workspaces[0].tabs[0].panes[&root_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.terminals.get_mut(&root_terminal_id).unwrap().cwd = repo.clone();
         app.selected = 0;

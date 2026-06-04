@@ -334,7 +334,7 @@ impl AppState {
             let Some(pane) = tab.panes.get(&pane_id) else {
                 continue;
             };
-            let terminal = self.terminals.get(&pane.attached_terminal_id);
+            let terminal = pane.terminal_id().and_then(|tid| self.terminals.get(tid));
             let pane_number = ws.public_pane_number(pane_id).unwrap_or(0);
             let label = terminal
                 .and_then(|terminal| terminal.effective_title())
@@ -591,7 +591,7 @@ fn tab_aggregate_state(
     let mut aggregate = AgentState::Unknown;
     let mut seen = true;
     for pane in tab.panes.values() {
-        let Some(terminal) = terminals.get(&pane.attached_terminal_id) else {
+        let Some(terminal) = pane.terminal_id().and_then(|tid| terminals.get(tid)) else {
             continue;
         };
         if state_priority(terminal.state, pane.seen) > state_priority(aggregate, seen) {
@@ -643,7 +643,7 @@ fn activity_summary_for_panes<'a>(
     let mut working = 0usize;
     let mut done = 0usize;
     for pane in panes {
-        let Some(terminal) = terminals.get(&pane.attached_terminal_id) else {
+        let Some(terminal) = pane.terminal_id().and_then(|tid| terminals.get(tid)) else {
             continue;
         };
         match (terminal.state, pane.seen) {
@@ -695,7 +695,8 @@ impl AppState {
                         .into_iter()
                         .filter_map(move |pane_id| {
                             ws.pane_state(pane_id)
-                                .map(|pane| (ws_idx, pane_id, pane.attached_terminal_id.clone()))
+                                .and_then(|pane| pane.terminal_id().cloned())
+                                .map(|tid| (ws_idx, pane_id, tid))
                         })
                 })
             })
@@ -1155,7 +1156,7 @@ impl AppState {
             .into_iter()
             .flat_map(|ws| &ws.tabs)
             .flat_map(|tab| tab.panes.values())
-            .map(|pane| pane.attached_terminal_id.clone())
+            .filter_map(|pane| pane.terminal_id().cloned())
             .collect()
     }
 
@@ -1169,7 +1170,7 @@ impl AppState {
             .and_then(|ws| ws.tabs.get(tab_idx))
             .into_iter()
             .flat_map(|tab| tab.panes.values())
-            .map(|pane| pane.attached_terminal_id.clone())
+            .filter_map(|pane| pane.terminal_id().cloned())
             .collect()
     }
 
@@ -1181,7 +1182,7 @@ impl AppState {
         self.workspaces
             .get(ws_idx)?
             .pane_state(pane_id)
-            .map(|pane| pane.attached_terminal_id.clone())
+            .and_then(|pane| pane.terminal_id().cloned())
     }
 
     pub(crate) fn remove_unattached_terminal_ids(
@@ -1193,7 +1194,7 @@ impl AppState {
                 ws.tabs.iter().any(|tab| {
                     tab.panes
                         .values()
-                        .any(|pane| pane.attached_terminal_id == terminal_id)
+                        .any(|pane| pane.terminal_id() == Some(&terminal_id))
                 })
             });
             if !still_attached
@@ -2164,7 +2165,7 @@ impl AppState {
             .position(|ws| ws.pane_state(pane_id).is_some())?;
         let terminal_id = self.workspaces[ws_idx]
             .pane_state(pane_id)?
-            .attached_terminal_id
+            .terminal_id()?
             .clone();
         let previous_seen = self.workspaces[ws_idx].pane_state(pane_id)?.seen;
         let mutation = {
@@ -2914,7 +2915,8 @@ mod tests {
             .panes
             .get(&pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         if let Some(terminal) = state.terminals.get_mut(&terminal_id) {
             terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
@@ -3414,7 +3416,8 @@ mod tests {
             .panes
             .get(&pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         let terminal = state.terminals.get(&terminal_id).unwrap();
         assert_eq!(terminal.state, AgentState::Working);
@@ -3432,7 +3435,8 @@ mod tests {
             .panes
             .get(&bg_pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         state.terminals.get_mut(&bg_terminal_id).unwrap().state = AgentState::Working;
 
@@ -3462,7 +3466,8 @@ mod tests {
             .panes
             .get(&pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         state.terminals.get_mut(&terminal_id).unwrap().state = AgentState::Working;
         state.workspaces[0].panes.get_mut(&pane_id).unwrap().seen = false;
@@ -3587,7 +3592,8 @@ mod tests {
             .panes
             .get(&bg_pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
 
         state.handle_app_event(AppEvent::StateChanged {
@@ -3638,7 +3644,8 @@ mod tests {
             .panes
             .get(&pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
 
         state.handle_app_event(AppEvent::StateChanged {
@@ -3690,7 +3697,8 @@ mod tests {
             .panes
             .get(&pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
 
         state.handle_app_event(AppEvent::StateChanged {
@@ -3759,7 +3767,8 @@ mod tests {
             .panes
             .get(&bg_pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         state.terminals.get_mut(&bg_terminal_id).unwrap().state = AgentState::Working;
 

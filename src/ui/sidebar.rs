@@ -1260,14 +1260,16 @@ mod tests {
         app.workspaces = vec![first, second];
         app.ensure_test_terminals();
         let first_terminal_id = app.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.terminals
             .get_mut(&first_terminal_id)
             .unwrap()
             .detected_agent = Some(Agent::Pi);
         let second_terminal_id = app.workspaces[1].tabs[second_tab].panes[&second_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.terminals
             .get_mut(&second_terminal_id)
@@ -1311,7 +1313,8 @@ mod tests {
         app.workspaces = vec![workspace];
         app.ensure_test_terminals();
         let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         let terminal = app.terminals.get_mut(&terminal_id).unwrap();
         terminal.cwd = stale_cwd;
@@ -1362,7 +1365,8 @@ mod tests {
         app.workspaces = vec![workspace];
         app.ensure_test_terminals();
         let first_terminal_id = app.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.terminals
             .get_mut(&first_terminal_id)

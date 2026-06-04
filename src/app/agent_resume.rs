@@ -93,15 +93,13 @@ impl App {
                     let Some(pane) = tab.panes.get(&info.id) else {
                         continue;
                     };
-                    if self
-                        .terminal_runtimes
-                        .get(&pane.attached_terminal_id)
-                        .is_some()
-                    {
+                    let Some(terminal_id) = pane.terminal_id() else {
+                        continue;
+                    };
+                    if self.terminal_runtimes.get(terminal_id).is_some() {
                         continue;
                     }
-                    let Some(terminal) = self.state.terminals.get(&pane.attached_terminal_id)
-                    else {
+                    let Some(terminal) = self.state.terminals.get(terminal_id) else {
                         continue;
                     };
                     let Some(plan) = terminal.pending_agent_resume_plan.clone() else {
@@ -109,7 +107,7 @@ impl App {
                     };
                     pending.push(PendingAgentResumeCandidate {
                         pane_id: info.id,
-                        terminal_id: pane.attached_terminal_id.clone(),
+                        terminal_id: terminal_id.clone(),
                         cwd: terminal.cwd.clone(),
                         plan,
                         rows: info.inner_rect.height,
@@ -166,7 +164,7 @@ impl App {
             ws.tabs.iter().find_map(|tab| {
                 tab.layout.pane_ids().into_iter().find_map(|pane_id| {
                     let pane = tab.panes.get(&pane_id)?;
-                    if &pane.attached_terminal_id != terminal_id {
+                    if pane.terminal_id() != Some(terminal_id) {
                         return None;
                     }
                     let terminal = self.state.terminals.get(terminal_id)?;

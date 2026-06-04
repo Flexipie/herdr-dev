@@ -41,7 +41,7 @@ pub(crate) fn toast_message_from_state_change(
                 let pane = tab.panes.get(&pane_id)?;
                 let agent_label = state
                     .terminals
-                    .get(&pane.attached_terminal_id)
+                    .get(pane.terminal_id()?)
                     .and_then(|terminal| terminal.effective_agent_label())?;
                 let workspace_label = ws.display_name_from(&state.terminals, terminal_runtimes);
                 Some(format!(

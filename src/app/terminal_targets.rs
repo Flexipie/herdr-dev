@@ -155,7 +155,7 @@ impl App {
         let ws = self.state.workspaces.get(ws_idx)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
         let pane = ws.pane_state(pane_id)?;
-        let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
+        let terminal = self.state.terminals.get(pane.terminal_id()?)?;
         Some(TerminalTargetCandidate {
             terminal_id: terminal.id.to_string(),
             pane_id: self.public_pane_id(ws_idx, pane_id)?,

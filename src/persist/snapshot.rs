@@ -309,22 +309,26 @@ fn capture_tab(
         let label = tab
             .panes
             .get(id)
-            .and_then(|pane| terminals.get(&pane.attached_terminal_id))
+            .and_then(|pane| pane.terminal_id())
+            .and_then(|tid| terminals.get(tid))
             .and_then(|terminal| terminal.manual_label.clone());
         let agent_name = tab
             .panes
             .get(id)
-            .and_then(|pane| terminals.get(&pane.attached_terminal_id))
+            .and_then(|pane| pane.terminal_id())
+            .and_then(|tid| terminals.get(tid))
             .and_then(|terminal| terminal.agent_name.clone());
         let launch_argv = tab
             .panes
             .get(id)
-            .and_then(|pane| terminals.get(&pane.attached_terminal_id))
+            .and_then(|pane| pane.terminal_id())
+            .and_then(|tid| terminals.get(tid))
             .and_then(|terminal| terminal.launch_argv.clone());
         let agent_session =
             tab.panes
                 .get(id)
-                .and_then(|pane| terminals.get(&pane.attached_terminal_id))
+                .and_then(|pane| pane.terminal_id())
+                .and_then(|tid| terminals.get(tid))
                 .and_then(|terminal| {
                     if let Some(authority) = terminal.hook_authority.as_ref() {
                         if let Some(session_ref) = authority.session_ref.as_ref() {
@@ -406,7 +410,7 @@ fn capture_pane_history(
     terminal_runtimes: &TerminalRuntimeRegistry,
 ) -> Option<PaneHistorySnapshot> {
     let ansi = terminal_runtimes
-        .get(&pane?.attached_terminal_id)?
+        .get(pane?.terminal_id()?)?
         .snapshot_history()?;
     let lines = ansi.lines().count();
     Some(PaneHistorySnapshot { ansi, lines })
@@ -927,11 +931,13 @@ mod tests {
         let second = state.workspaces[0].test_split(Direction::Horizontal);
         state.ensure_test_terminals();
         let root_terminal_id = state.workspaces[0].tabs[0].panes[&root]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         state.terminals.get_mut(&root_terminal_id).unwrap().cwd = PathBuf::from("/tmp/pion");
         let second_terminal_id = state.workspaces[0].tabs[0].panes[&second]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         state.terminals.get_mut(&second_terminal_id).unwrap().cwd = PathBuf::from("/tmp/herdr");
 
@@ -948,7 +954,8 @@ mod tests {
         let state = state_with_workspaces(&["one"]);
         let root = state.workspaces[0].tabs[0].root_pane;
         let terminal_id = state.workspaces[0].tabs[0].panes[&root]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         let mut terminal_runtimes = TerminalRuntimeRegistry::new();
         terminal_runtimes.insert(
@@ -980,10 +987,12 @@ mod tests {
         let first = state.workspaces[0].tabs[0].root_pane;
         let second = state.workspaces[0].test_split(Direction::Horizontal);
         let first_terminal_id = state.workspaces[0].tabs[0].panes[&first]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         let second_terminal_id = state.workspaces[0].tabs[0].panes[&second]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         let mut terminal_runtimes = TerminalRuntimeRegistry::new();
         terminal_runtimes.insert(
@@ -1025,7 +1034,8 @@ mod tests {
         let root = state.workspaces[0].tabs[0].root_pane;
         state.ensure_test_terminals();
         let terminal_id = state.workspaces[0].tabs[0].panes[&root]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         state
             .terminals
@@ -1062,7 +1072,8 @@ mod tests {
         let root = state.workspaces[0].tabs[0].root_pane;
         state.ensure_test_terminals();
         let terminal_id = state.workspaces[0].tabs[0].panes[&root]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         state
             .terminals

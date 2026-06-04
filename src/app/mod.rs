@@ -2397,7 +2397,8 @@ mod tests {
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         let root_terminal_id = app.state.workspaces[0].tabs[0].panes[&root_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -2410,7 +2411,8 @@ mod tests {
             .unwrap()
             .seen = false;
         let split_terminal_id = app.state.workspaces[0].tabs[0].panes[&split_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -2423,7 +2425,8 @@ mod tests {
             .unwrap()
             .seen = false;
         let bg_terminal_id = app.state.workspaces[0].tabs[background_tab].panes[&background_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state.terminals.get_mut(&bg_terminal_id).unwrap().state = AgentState::Idle;
         app.state.workspaces[0].tabs[background_tab]
@@ -2696,7 +2699,8 @@ mod tests {
         let terminal_id = app.state.workspaces[0]
             .pane_state(pane)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         assert_eq!(
             app.state
@@ -2770,14 +2774,15 @@ mod tests {
         let terminal_id = workspace.terminal_id(pane).unwrap().to_string();
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
-        let attached_terminal_id = app.state.workspaces[0]
+        let terminal_id_for_label = app.state.workspaces[0]
             .pane_state(pane)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
-            .get_mut(&attached_terminal_id)
+            .get_mut(&terminal_id_for_label)
             .unwrap()
             .set_agent_name("reviewer".into());
         app.state.active = Some(0);
@@ -2817,7 +2822,8 @@ mod tests {
         let first_terminal_id = app.state.workspaces[0]
             .pane_state(first)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -2827,7 +2833,8 @@ mod tests {
         let second_terminal_id = app.state.workspaces[0]
             .pane_state(second)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -2875,7 +2882,8 @@ mod tests {
         let target_terminal_id = app.state.workspaces[0]
             .pane_state(target_pane)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -3257,7 +3265,8 @@ mod tests {
         let terminal_id = app.state.workspaces[0]
             .pane_state(pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.handle_internal_event(AppEvent::StateChanged {
             pane_id,

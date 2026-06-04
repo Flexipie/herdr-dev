@@ -675,7 +675,8 @@ mod tests {
         app.state.workspaces = vec![ws];
         app.state.ensure_test_terminals();
         let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -683,7 +684,8 @@ mod tests {
             .unwrap()
             .detected_agent = Some(Agent::Pi);
         let second_terminal_id = app.state.workspaces[0].tabs[first_tab].panes[&second_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -754,7 +756,8 @@ mod tests {
         app.state.workspaces = vec![first, second];
         app.state.ensure_test_terminals();
         let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -762,7 +765,8 @@ mod tests {
             .unwrap()
             .detected_agent = Some(Agent::Pi);
         let second_terminal_id = app.state.workspaces[1].tabs[0].panes[&second_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -813,7 +817,8 @@ mod tests {
         app.state.workspaces = vec![ws];
         app.state.ensure_test_terminals();
         let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -822,7 +827,8 @@ mod tests {
             .detected_agent = Some(Agent::Pi);
         for (tab_idx, pane_id, agent) in tabs {
             let terminal_id = app.state.workspaces[0].tabs[tab_idx].panes[&pane_id]
-                .attached_terminal_id
+                .terminal_id()
+                .expect("test pty pane")
                 .clone();
             app.state
                 .terminals
@@ -866,7 +872,8 @@ mod tests {
         app.state.workspaces = vec![ws];
         app.state.ensure_test_terminals();
         let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -874,7 +881,8 @@ mod tests {
             .unwrap()
             .detected_agent = Some(Agent::Pi);
         let second_terminal_id = app.state.workspaces[0].tabs[second_tab].panes[&second_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -883,7 +891,8 @@ mod tests {
             .detected_agent = Some(Agent::Claude);
         for (tab_idx, pane_id, agent) in extra_tabs {
             let terminal_id = app.state.workspaces[0].tabs[tab_idx].panes[&pane_id]
-                .attached_terminal_id
+                .terminal_id()
+                .expect("test pty pane")
                 .clone();
             app.state
                 .terminals
@@ -922,7 +931,8 @@ mod tests {
         app.state.workspaces = vec![ws];
         app.state.ensure_test_terminals();
         let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -930,7 +940,8 @@ mod tests {
             .unwrap()
             .detected_agent = Some(Agent::Pi);
         let second_terminal_id = app.state.workspaces[0].tabs[second_tab].panes[&second_pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -1353,11 +1364,13 @@ mod tests {
         app.state.workspaces = vec![first, second];
         app.state.ensure_test_terminals();
         let first_terminal_id = app.state.workspaces[0].tabs[0].panes[&first_root]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state.terminals.get_mut(&first_terminal_id).unwrap().cwd = first_repo.clone();
         let second_terminal_id = app.state.workspaces[1].tabs[0].panes[&second_root]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals

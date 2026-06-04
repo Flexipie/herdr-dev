@@ -8,10 +8,32 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::events::AppEvent;
 use crate::layout::{PaneId, TileLayout};
-use crate::pane::PaneState;
+use crate::pane::{PaneAttachment, PaneState, ViewPaneState};
 use crate::terminal::{TerminalId, TerminalRuntime, TerminalRuntimeRegistry, TerminalState};
 
-pub(crate) type DetachedPane = (PaneId, TerminalId);
+// PR #2: production code never constructs the `View` arm and never reads
+// `Pty::terminal_id` (cleanup of orphaned terminals happens through a
+// separate sweep). PR #3 wires up both. Keep the fields so PR #3 doesn't
+// have to widen the enum again.
+#[allow(dead_code)]
+pub(crate) enum DetachedPane {
+    Pty {
+        pane_id: PaneId,
+        terminal_id: TerminalId,
+    },
+    View {
+        pane_id: PaneId,
+        state: ViewPaneState,
+    },
+}
+
+impl DetachedPane {
+    pub(crate) fn pane_id(&self) -> PaneId {
+        match self {
+            DetachedPane::Pty { pane_id, .. } | DetachedPane::View { pane_id, .. } => *pane_id,
+        }
+    }
+}
 
 pub struct NewPane {
     pub pane_id: PaneId,
@@ -135,7 +157,7 @@ impl Tab {
             .with_launch_argv(launch_argv_for_restore.to_vec())
             .with_respawn_shell_on_exit();
         let mut panes = HashMap::new();
-        panes.insert(root_id, PaneState::new(terminal_id));
+        panes.insert(root_id, PaneState::new_pty(terminal_id));
 
         Ok((
             Self {
@@ -207,7 +229,7 @@ impl Tab {
             None => TerminalState::new(terminal_id.clone(), initial_cwd),
         };
         let mut panes = HashMap::new();
-        panes.insert(root_id, PaneState::new(terminal_id));
+        panes.insert(root_id, PaneState::new_pty(terminal_id));
 
         Ok((
             Self {
@@ -385,7 +407,7 @@ impl Tab {
             }
             None => TerminalState::new(terminal_id.clone(), actual_cwd),
         };
-        self.panes.insert(new_id, PaneState::new(terminal_id));
+        self.panes.insert(new_id, PaneState::new_pty(terminal_id));
         self.zoomed = false;
         Ok(NewPane {
             pane_id: new_id,
@@ -424,12 +446,17 @@ impl Tab {
         }
 
         let pane = self.panes.remove(&pane_id)?;
-        let terminal_id = pane.attached_terminal_id;
         self.zoomed = false;
         if let Some(next_root) = next_root {
             self.root_pane = next_root;
         }
-        Some((pane_id, terminal_id))
+        Some(match pane.into_attachment() {
+            PaneAttachment::Pty { terminal_id } => DetachedPane::Pty {
+                pane_id,
+                terminal_id,
+            },
+            PaneAttachment::View(state) => DetachedPane::View { pane_id, state },
+        })
     }
 
     fn promoted_root_if_needed(&self, closing: PaneId) -> Option<PaneId> {
@@ -440,9 +467,7 @@ impl Tab {
     }
 
     pub fn terminal_id(&self, pane_id: PaneId) -> Option<&TerminalId> {
-        self.panes
-            .get(&pane_id)
-            .map(|pane| &pane.attached_terminal_id)
+        self.panes.get(&pane_id).and_then(|pane| pane.terminal_id())
     }
 
     pub fn cwd_for_pane(
@@ -471,5 +496,34 @@ impl Tab {
         terminal_runtimes
             .get(terminal_id)
             .and_then(|rt| rt.foreground_cwd())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::Workspace;
+    use ratatui::layout::Direction;
+
+    #[test]
+    fn close_view_pane_returns_view_variant_and_does_not_panic() {
+        let mut ws = Workspace::test_new("close-view");
+        let view_pane = ws.test_split_view(Direction::Horizontal);
+        let tab = ws.active_tab_mut().unwrap();
+        let detached = tab.close_pane(view_pane);
+        assert!(matches!(detached, Some(DetachedPane::View { .. })));
+        assert_eq!(
+            detached.as_ref().map(DetachedPane::pane_id),
+            Some(view_pane)
+        );
+    }
+
+    #[test]
+    fn close_pty_pane_returns_pty_variant() {
+        let mut ws = Workspace::test_new("close-pty");
+        let pty_pane = ws.test_split(Direction::Horizontal);
+        let tab = ws.active_tab_mut().unwrap();
+        let detached = tab.close_pane(pty_pane);
+        assert!(matches!(detached, Some(DetachedPane::Pty { .. })));
     }
 }

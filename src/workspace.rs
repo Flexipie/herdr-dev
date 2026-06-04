@@ -618,8 +618,8 @@ impl Workspace {
             return tab_count <= 1 || self.close_active_tab_and_report();
         }
 
-        if let Some((removed, _terminal_id)) = self.active_tab_mut().and_then(Tab::close_focused) {
-            self.unregister_pane(removed);
+        if let Some(detached) = self.active_tab_mut().and_then(Tab::close_focused) {
+            self.unregister_pane(detached.pane_id());
         }
         false
     }
@@ -647,8 +647,8 @@ impl Workspace {
             return false;
         }
 
-        if let Some((removed, _terminal_id)) = self.tabs[tab_idx].remove_pane(pane_id) {
-            self.unregister_pane(removed);
+        if let Some(detached) = self.tabs[tab_idx].remove_pane(pane_id) {
+            self.unregister_pane(detached.pane_id());
         }
         false
     }
@@ -741,6 +741,12 @@ impl Workspace {
         self.tabs.iter().find_map(|tab| tab.panes.get(&pane_id))
     }
 
+    pub fn pane_state_mut(&mut self, pane_id: PaneId) -> Option<&mut PaneState> {
+        self.tabs
+            .iter_mut()
+            .find_map(|tab| tab.panes.get_mut(&pane_id))
+    }
+
     pub fn terminal_id(&self, pane_id: PaneId) -> Option<&TerminalId> {
         self.tabs.iter().find_map(|tab| tab.terminal_id(pane_id))
     }
@@ -771,8 +777,8 @@ impl Workspace {
             return false;
         }
 
-        if let Some((removed, _terminal_id)) = self.tabs[tab_idx].close_pane(pane_id) {
-            self.unregister_pane(removed);
+        if let Some(detached) = self.tabs[tab_idx].close_pane(pane_id) {
+            self.unregister_pane(detached.pane_id());
         }
         false
     }
@@ -819,7 +825,7 @@ impl Workspace {
         let (layout, root_id) = TileLayout::new();
         let terminal_id = TerminalId::alloc();
         let mut panes = HashMap::new();
-        panes.insert(root_id, PaneState::new(terminal_id));
+        panes.insert(root_id, PaneState::new_pty(terminal_id));
         let tab = Tab {
             custom_name: None,
             number: 1,
@@ -859,9 +865,34 @@ impl Workspace {
         let tab = self.active_tab_mut().expect("workspace must have tab");
         let new_id = tab.layout.split_focused(direction);
         tab.panes
-            .insert(new_id, PaneState::new(TerminalId::alloc()));
+            .insert(new_id, PaneState::new_pty(TerminalId::alloc()));
         self.register_new_pane(new_id);
         new_id
+    }
+
+    pub(crate) fn test_split_view(&mut self, direction: Direction) -> PaneId {
+        let (pane_id, _handle) = self.test_split_view_with_handle(direction);
+        pane_id
+    }
+
+    pub(crate) fn test_split_view_with_handle(
+        &mut self,
+        direction: Direction,
+    ) -> (PaneId, crate::pane::TestPlaceholderViewHandle) {
+        let tab = self.active_tab_mut().expect("workspace must have tab");
+        let new_id = tab.layout.split_focused(direction);
+        let (view, handle) = crate::pane::TestPlaceholderView::new();
+        tab.panes.insert(
+            new_id,
+            crate::pane::PaneState {
+                attachment: crate::pane::PaneAttachment::View(crate::pane::ViewPaneState::new(
+                    Box::new(view),
+                )),
+                seen: true,
+            },
+        );
+        self.register_new_pane(new_id);
+        (new_id, handle)
     }
 
     pub(crate) fn test_add_tab(&mut self, name: Option<&str>) -> usize {
@@ -870,7 +901,7 @@ impl Workspace {
         let render_dirty = Arc::new(AtomicBool::new(false));
         let (layout, root_id) = TileLayout::new();
         let mut panes = HashMap::new();
-        panes.insert(root_id, PaneState::new(TerminalId::alloc()));
+        panes.insert(root_id, PaneState::new_pty(TerminalId::alloc()));
         let tab = Tab {
             custom_name: name.map(str::to_string),
             number: self.tabs.len() + 1,

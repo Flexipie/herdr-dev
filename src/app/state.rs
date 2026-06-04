@@ -1651,11 +1651,14 @@ impl AppState {
         for ws in &self.workspaces {
             for tab in &ws.tabs {
                 for pane in tab.panes.values() {
-                    if !self.terminals.contains_key(&pane.attached_terminal_id) {
+                    let Some(terminal_id) = pane.terminal_id() else {
+                        continue;
+                    };
+                    if !self.terminals.contains_key(terminal_id) {
                         let cwd = ws.identity_cwd.clone();
                         self.terminals.insert(
-                            pane.attached_terminal_id.clone(),
-                            TerminalState::new(pane.attached_terminal_id.clone(), cwd),
+                            terminal_id.clone(),
+                            TerminalState::new(terminal_id.clone(), cwd),
                         );
                     }
                 }

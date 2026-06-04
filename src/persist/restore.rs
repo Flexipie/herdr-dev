@@ -466,7 +466,7 @@ fn restore_tab(
             ) {
                 terminal.set_persisted_agent_session(session);
             }
-            panes.insert(*id, PaneState::new(terminal_id));
+            panes.insert(*id, PaneState::new_pty(terminal_id));
             terminals.push(terminal);
             continue;
         }
@@ -531,7 +531,7 @@ fn restore_tab(
                 ) {
                     terminal.set_persisted_agent_session(session);
                 }
-                panes.insert(*id, PaneState::new(terminal_id.clone()));
+                panes.insert(*id, PaneState::new_pty(terminal_id.clone()));
                 terminal_runtimes.insert(terminal_id, runtime);
                 terminals.push(terminal);
             }

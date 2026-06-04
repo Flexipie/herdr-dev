@@ -49,6 +49,16 @@ impl AppState {
         if info.inner_rect.width == 0 || info.inner_rect.height == 0 {
             return;
         }
+        // TODO(view-panes/pr-3): plumb view-pane selection through the trait.
+        if matches!(
+            self.workspaces
+                .get(ws_idx)
+                .and_then(|ws| ws.pane_state(pane_id))
+                .map(|pane| pane.attachment()),
+            Some(crate::pane::PaneAttachment::View(_))
+        ) {
+            return;
+        }
 
         let cursor = self
             .runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, pane_id)

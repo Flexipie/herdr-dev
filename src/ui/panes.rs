@@ -253,69 +253,113 @@ pub(super) fn render_panes(
     let terminal_active = app.mode == Mode::Terminal;
 
     for info in &app.view.pane_infos {
-        if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
-            if multi_pane {
-                let (border_style, border_set) = if info.is_focused && terminal_active {
-                    (
-                        Style::default().fg(app.palette.accent),
-                        ratatui::symbols::border::THICK,
-                    )
-                } else if info.is_focused {
-                    (
-                        Style::default().fg(app.palette.accent),
-                        ratatui::symbols::border::PLAIN,
-                    )
-                } else {
-                    (
-                        Style::default().fg(app.palette.overlay0),
-                        ratatui::symbols::border::PLAIN,
-                    )
-                };
+        let Some(pane_state) = ws.pane_state(info.id) else {
+            continue;
+        };
 
-                let mut block = Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(border_style)
-                    .border_set(border_set);
-                if let Some(title) = ws
-                    .pane_state(info.id)
-                    .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
-                    .and_then(|terminal| {
-                        terminal.border_label(app.show_agent_labels_on_pane_borders)
-                    })
-                    .and_then(|label| pane_border_title(&label, info.rect.width))
-                {
-                    block = block.title(Line::from(Span::styled(title, border_style)));
+        let pty_rt = match pane_state.attachment() {
+            crate::pane::PaneAttachment::Pty { .. } => {
+                match app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
+                    Some(rt) => Some(rt),
+                    // No runtime yet → skip border and body so the user
+                    // doesn't see a stray empty frame.
+                    None => continue,
                 }
-                frame.render_widget(block, info.rect);
             }
+            crate::pane::PaneAttachment::View(_) => None,
+        };
 
-            let show_cursor = info.is_focused && terminal_active && !pane_is_scrolled_back(rt);
-            rt.render(frame, info.inner_rect, show_cursor);
-            render_pane_scrollbar(app, frame, info, rt);
+        if multi_pane {
+            let (border_style, border_set) = if info.is_focused && terminal_active {
+                (
+                    Style::default().fg(app.palette.accent),
+                    ratatui::symbols::border::THICK,
+                )
+            } else if info.is_focused {
+                (
+                    Style::default().fg(app.palette.accent),
+                    ratatui::symbols::border::PLAIN,
+                )
+            } else {
+                (
+                    Style::default().fg(app.palette.overlay0),
+                    ratatui::symbols::border::PLAIN,
+                )
+            };
 
-            let should_dim = !info.is_focused && multi_pane && !terminal_active;
-            if should_dim {
-                let inner = info.inner_rect;
-                let buf = frame.buffer_mut();
-                for y in inner.y..inner.y + inner.height {
-                    for x in inner.x..inner.x + inner.width {
-                        let cell = &mut buf[(x, y)];
-                        cell.set_style(cell.style().add_modifier(Modifier::DIM));
+            let mut block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .border_set(border_set);
+            if let Some(title) = pane_label(
+                pane_state,
+                &app.terminals,
+                app.show_agent_labels_on_pane_borders,
+            )
+            .and_then(|label| pane_border_title(&label, info.rect.width))
+            {
+                block = block.title(Line::from(Span::styled(title, border_style)));
+            }
+            frame.render_widget(block, info.rect);
+        }
+
+        match (pane_state.attachment(), pty_rt) {
+            (crate::pane::PaneAttachment::Pty { .. }, Some(rt)) => {
+                let show_cursor = info.is_focused && terminal_active && !pane_is_scrolled_back(rt);
+                rt.render(frame, info.inner_rect, show_cursor);
+                render_pane_scrollbar(app, frame, info, rt);
+
+                let should_dim = !info.is_focused && multi_pane && !terminal_active;
+                if should_dim {
+                    let inner = info.inner_rect;
+                    let buf = frame.buffer_mut();
+                    for y in inner.y..inner.y + inner.height {
+                        for x in inner.x..inner.x + inner.width {
+                            let cell = &mut buf[(x, y)];
+                            cell.set_style(cell.style().add_modifier(Modifier::DIM));
+                        }
                     }
                 }
-            }
 
-            render_selection_highlight(
-                &app.selection,
-                frame,
-                info.id,
-                info.inner_rect,
-                rt.scroll_metrics(),
-                &app.palette,
-                app.host_terminal_theme,
-            );
-            render_copy_mode_cursor(app, frame, info);
+                render_selection_highlight(
+                    &app.selection,
+                    frame,
+                    info.id,
+                    info.inner_rect,
+                    rt.scroll_metrics(),
+                    &app.palette,
+                    app.host_terminal_theme,
+                );
+                render_copy_mode_cursor(app, frame, info);
+            }
+            (crate::pane::PaneAttachment::View(view_state), _) => {
+                view_state.kind().render(
+                    frame,
+                    info.inner_rect,
+                    info.is_focused && terminal_active,
+                );
+            }
+            (crate::pane::PaneAttachment::Pty { .. }, None) => {
+                unreachable!("pty pane without runtime is filtered above");
+            }
         }
+    }
+}
+
+fn pane_label<'a>(
+    pane: &'a crate::pane::PaneState,
+    terminals: &std::collections::HashMap<
+        crate::terminal::TerminalId,
+        crate::terminal::TerminalState,
+    >,
+    show_agent_labels: bool,
+) -> Option<std::borrow::Cow<'a, str>> {
+    match pane.attachment() {
+        crate::pane::PaneAttachment::Pty { terminal_id } => terminals
+            .get(terminal_id)
+            .and_then(|terminal| terminal.border_label(show_agent_labels))
+            .map(std::borrow::Cow::Owned),
+        crate::pane::PaneAttachment::View(state) => Some(state.kind().title()),
     }
 }
 
@@ -754,5 +798,77 @@ mod tests {
             panic!("selection background should resolve to rgb");
         };
         assert!(relative_luminance((r, g, b)) > relative_luminance((12, 14, 16)));
+    }
+
+    #[test]
+    fn render_panes_dispatches_to_view_arm_without_panic() {
+        let mut app = AppState::test_new();
+        let mut workspace = Workspace::test_new("test");
+        let _view_pane = workspace.test_split_view(ratatui::layout::Direction::Horizontal);
+        app.workspaces = vec![workspace];
+        app.active = Some(0);
+        app.mode = Mode::Terminal;
+
+        let area = Rect::new(0, 0, 40, 8);
+        let terminal_runtimes = TerminalRuntimeRegistry::new();
+        app.view.pane_infos = compute_pane_infos(
+            &app,
+            &terminal_runtimes,
+            area,
+            false,
+            crate::kitty_graphics::HostCellSize::default(),
+        );
+
+        let backend = ratatui::backend::TestBackend::new(40, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_panes(&app, &terminal_runtimes, frame, area))
+            .unwrap();
+    }
+
+    #[test]
+    fn pty_pane_without_runtime_skips_border() {
+        // Regression: a PTY pane whose runtime hasn't been installed yet
+        // must not leave a stray empty border on screen.
+        let mut app = AppState::test_new();
+        let mut workspace = Workspace::test_new("test");
+        // Split into two PTY panes but install no runtimes.
+        let _second = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        app.workspaces = vec![workspace];
+        app.active = Some(0);
+        app.mode = Mode::Terminal;
+
+        let area = Rect::new(0, 0, 40, 8);
+        let terminal_runtimes = TerminalRuntimeRegistry::new();
+        app.view.pane_infos = compute_pane_infos(
+            &app,
+            &terminal_runtimes,
+            area,
+            false,
+            crate::kitty_graphics::HostCellSize::default(),
+        );
+
+        let backend = ratatui::backend::TestBackend::new(40, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_panes(&app, &terminal_runtimes, frame, area))
+            .unwrap();
+
+        // Buffer should be empty (no border characters) because no PTY
+        // runtime was installed; border + body are both skipped together.
+        let buffer = terminal.backend().buffer();
+        let mut painted = false;
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = &buffer[(x, y)];
+                if !cell.symbol().chars().all(|c| c == ' ') {
+                    painted = true;
+                }
+            }
+        }
+        assert!(
+            !painted,
+            "expected blank buffer when no PTY runtime exists; got painted cells"
+        );
     }
 }

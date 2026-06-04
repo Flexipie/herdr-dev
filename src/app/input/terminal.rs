@@ -89,6 +89,22 @@ impl App {
         let ws_idx = self.state.active?;
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane_id = ws.focused_pane_id()?;
+
+        if let Some(crate::pane::PaneAttachment::View(_)) =
+            ws.pane_state(pane_id).map(|p| p.attachment())
+        {
+            let ws_mut = self.state.workspaces.get_mut(ws_idx)?;
+            if let Some(pane) = ws_mut.pane_state_mut(pane_id) {
+                if let crate::pane::PaneAttachment::View(state) = pane.attachment_mut() {
+                    // PR #2: no PTY fallback once view dispatch is taken.
+                    // PR #3 may propagate NotHandled up to AppState for global
+                    // keybinds; for now the outcome is informational only.
+                    let _ = state.kind_mut().handle_key(&key);
+                }
+            }
+            return None;
+        }
+
         let rt =
             self.state
                 .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)?;
@@ -1121,5 +1137,33 @@ mod tests {
             .expect("scroll metrics after PageUp");
         // Forwarded to pane, so test runtime doesn't process it — scroll stays at bottom.
         assert_eq!(end_metrics.offset_from_bottom, 0);
+    }
+
+    #[tokio::test]
+    async fn terminal_key_dispatches_to_focused_view_kind() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let (view_pane, counters) =
+            ws.test_split_view_with_handle(ratatui::layout::Direction::Horizontal);
+        ws.tabs[0].layout.focus_pane(view_pane);
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+
+        app.handle_terminal_key_headless(TerminalKey::new(
+            KeyCode::Char('a'),
+            KeyModifiers::empty(),
+        ));
+        assert_eq!(counters.key_count(), 1);
+
+        app.handle_terminal_key_headless(TerminalKey::new(
+            KeyCode::Char('b'),
+            KeyModifiers::empty(),
+        ));
+        assert_eq!(counters.key_count(), 2);
     }
 }

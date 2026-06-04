@@ -990,7 +990,8 @@ mod tests {
         app.workspaces = vec![workspace];
         app.ensure_test_terminals();
         let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.terminals.get_mut(&terminal_id).unwrap().cwd = stale_cwd;
         app.active = Some(0);

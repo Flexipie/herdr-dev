@@ -244,9 +244,8 @@ impl App {
             .panes
             .values()
             .filter_map(|pane| {
-                self.state
-                    .terminals
-                    .get(&pane.attached_terminal_id)
+                pane.terminal_id()
+                    .and_then(|tid| self.state.terminals.get(tid))
                     .map(|terminal| (terminal.state, pane.seen))
             })
             .max_by_key(|(state, seen)| tab_attention_priority(*state, *seen))
@@ -301,7 +300,7 @@ impl App {
     ) -> Option<crate::api::schema::PaneInfo> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane = ws.pane_state(pane_id)?;
-        let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
+        let terminal = self.state.terminals.get(pane.terminal_id()?)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
         let focused = self.state.active == Some(ws_idx)
             && ws.active_tab == tab_idx

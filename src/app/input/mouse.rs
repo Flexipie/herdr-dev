@@ -968,7 +968,8 @@ impl AppState {
                         .active
                         .and_then(|ws_idx| self.workspaces.get(ws_idx))
                         .and_then(|ws| ws.pane_state(info.id))
-                        .and_then(|pane| self.terminals.get(&pane.attached_terminal_id))
+                        .and_then(|pane| pane.terminal_id())
+                        .and_then(|tid| self.terminals.get(tid))
                         .and_then(|terminal| terminal.manual_label.as_ref())
                         .is_some();
                     self.context_menu = Some(ContextMenuState {
@@ -1474,7 +1475,7 @@ impl AppState {
     }
 
     pub(super) fn forward_pane_mouse_button(
-        &self,
+        &mut self,
         terminal_runtimes: &TerminalRuntimeRegistry,
         info: &PaneInfo,
         mouse: MouseEvent,
@@ -1482,6 +1483,18 @@ impl AppState {
         let Some(ws_idx) = self.active else {
             return false;
         };
+        if let Some(pane) = self
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|ws| ws.pane_state_mut(info.id))
+        {
+            if let crate::pane::PaneAttachment::View(state) = pane.attachment_mut() {
+                return matches!(
+                    state.kind_mut().handle_mouse(&mouse, info.inner_rect),
+                    crate::pane::ViewKeyOutcome::Handled
+                );
+            }
+        }
         let Some(rt) = self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id)
         else {
             return false;
@@ -1499,7 +1512,7 @@ impl AppState {
     }
 
     pub(super) fn forward_pane_mouse_motion(
-        &self,
+        &mut self,
         terminal_runtimes: &TerminalRuntimeRegistry,
         info: &PaneInfo,
         mouse: MouseEvent,
@@ -1507,6 +1520,18 @@ impl AppState {
         let Some(ws_idx) = self.active else {
             return false;
         };
+        if let Some(pane) = self
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|ws| ws.pane_state_mut(info.id))
+        {
+            if let crate::pane::PaneAttachment::View(state) = pane.attachment_mut() {
+                return matches!(
+                    state.kind_mut().handle_mouse(&mouse, info.inner_rect),
+                    crate::pane::ViewKeyOutcome::Handled
+                );
+            }
+        }
         let Some(rt) = self.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id)
         else {
             return false;
@@ -2152,7 +2177,8 @@ mod tests {
             .panes
             .get(&target_pane)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         app.state
             .terminals
@@ -3104,5 +3130,48 @@ mod tests {
         };
 
         assert_eq!(wheel_routing(input_state), WheelRouting::HostScroll);
+    }
+
+    #[test]
+    fn forward_pane_mouse_button_dispatches_to_view_kind() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let (view_pane, counters) = ws.test_split_view_with_handle(Direction::Horizontal);
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+        let info = pane_infos
+            .iter()
+            .find(|info| info.id == view_pane)
+            .expect("view pane info present")
+            .clone();
+
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+
+        let handled = app.state.forward_pane_mouse_button(
+            &app.terminal_runtimes,
+            &info,
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                info.inner_rect.x + 1,
+                info.inner_rect.y + 1,
+            ),
+        );
+        assert!(handled);
+        assert_eq!(counters.mouse_count(), 1);
+
+        let handled = app.state.forward_pane_mouse_motion(
+            &app.terminal_runtimes,
+            &info,
+            mouse(
+                MouseEventKind::Moved,
+                info.inner_rect.x + 2,
+                info.inner_rect.y + 1,
+            ),
+        );
+        assert!(handled);
+        assert_eq!(counters.mouse_count(), 2);
     }
 }

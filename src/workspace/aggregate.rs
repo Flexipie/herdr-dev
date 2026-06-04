@@ -24,8 +24,8 @@ pub struct PaneDetail {
 impl Tab {
     pub fn has_working_pane(&self, terminals: &HashMap<TerminalId, TerminalState>) -> bool {
         self.panes.values().any(|pane| {
-            terminals
-                .get(&pane.attached_terminal_id)
+            pane.terminal_id()
+                .and_then(|tid| terminals.get(tid))
                 .is_some_and(|terminal| terminal.state == AgentState::Working)
         })
     }
@@ -36,7 +36,7 @@ impl Tab {
             .iter()
             .filter_map(|id| {
                 let pane = self.panes.get(id)?;
-                let terminal = terminals.get(&pane.attached_terminal_id)?;
+                let terminal = terminals.get(pane.terminal_id()?)?;
                 let fallback_agent_label = terminal
                     .agent_name
                     .as_deref()
@@ -83,7 +83,7 @@ impl Workspace {
             .flat_map(|tab| tab.panes.values())
             .filter_map(|pane| {
                 terminals
-                    .get(&pane.attached_terminal_id)
+                    .get(pane.terminal_id()?)
                     .map(|terminal| (terminal.state, pane.seen))
             })
             .max_by_key(|(state, seen)| pane_attention_priority(*state, *seen))

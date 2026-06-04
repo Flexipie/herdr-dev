@@ -729,7 +729,9 @@ impl HeadlessServer {
         for ws in &self.app.state.workspaces {
             for tab in &ws.tabs {
                 for (pane_id, pane) in &tab.panes {
-                    pane_by_terminal.insert(pane.attached_terminal_id.clone(), pane_id.raw());
+                    if let Some(tid) = pane.terminal_id() {
+                        pane_by_terminal.insert(tid.clone(), pane_id.raw());
+                    }
                 }
             }
         }
@@ -1284,7 +1286,7 @@ impl HeadlessServer {
                     self.app
                         .state
                         .terminals
-                        .get(&pane.attached_terminal_id)
+                        .get(pane.terminal_id()?)
                         .map(|terminal| terminal.state)
                 })
             })
@@ -1523,7 +1525,8 @@ impl HeadlessServer {
                     ws.tabs.iter().find_map(|tab| {
                         tab.panes
                             .get(pane_id)
-                            .map(|pane| pane.attached_terminal_id.to_string())
+                            .and_then(|pane| pane.terminal_id())
+                            .map(|tid| tid.to_string())
                     })
                 });
 
@@ -2167,7 +2170,7 @@ impl HeadlessServer {
                     ws.tabs.iter().flat_map(move |tab| {
                         tab.panes.iter().filter_map(move |(&pane_id, pane)| {
                             terminals
-                                .get(&pane.attached_terminal_id)
+                                .get(pane.terminal_id()?)
                                 .map(|terminal| (ws_idx, pane_id, terminal.state))
                         })
                     })
@@ -2244,11 +2247,9 @@ impl HeadlessServer {
                 continue;
             };
 
-            let Some(terminal_after) = self
-                .app
-                .state
-                .terminals
-                .get(&pane_after.attached_terminal_id)
+            let Some(terminal_after) = pane_after
+                .terminal_id()
+                .and_then(|tid| self.app.state.terminals.get(tid))
             else {
                 continue;
             };
@@ -2281,11 +2282,9 @@ impl HeadlessServer {
                     *prev_state,
                     new_state,
                 ) {
-                    if let Some(agent_label) = self
-                        .app
-                        .state
-                        .terminals
-                        .get(&pane_after.attached_terminal_id)
+                    if let Some(agent_label) = pane_after
+                        .terminal_id()
+                        .and_then(|tid| self.app.state.terminals.get(tid))
                         .and_then(|terminal| terminal.effective_agent_label())
                     {
                         let event_text = match kind {
@@ -3941,7 +3940,8 @@ next_tab = ""
         let terminal_id = server.app.state.workspaces[0]
             .pane_state(pane_id)
             .expect("pane")
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .to_string();
         let (writer, control_rx, _render_rx) = test_client_writer();
 
@@ -4194,7 +4194,8 @@ next_tab = ""
         let terminal_id = server.app.state.workspaces[0]
             .pane_state(pane_id)
             .expect("pane")
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         assert_eq!(
             server
@@ -6141,7 +6142,8 @@ next_tab = ""
         let terminal_id = server.app.state.workspaces[0]
             .pane_state(pane_id)
             .unwrap()
-            .attached_terminal_id
+            .terminal_id()
+            .expect("test pty pane")
             .clone();
         server
             .app

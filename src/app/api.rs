@@ -181,10 +181,9 @@ impl App {
                     else {
                         continue;
                     };
-                    let Some(agent_label) = self
-                        .state
-                        .terminals
-                        .get(&pane.attached_terminal_id)
+                    let Some(agent_label) = pane
+                        .terminal_id()
+                        .and_then(|tid| self.state.terminals.get(tid))
                         .and_then(|terminal| terminal.effective_agent_label())
                     else {
                         continue;
@@ -291,7 +290,10 @@ impl App {
         let Some((_, pane_state)) = self.find_pane(pane_id) else {
             return RuntimeExitAction::ClosePane;
         };
-        let Some(terminal) = self.state.terminals.get(&pane_state.attached_terminal_id) else {
+        let Some(terminal) = pane_state
+            .terminal_id()
+            .and_then(|tid| self.state.terminals.get(tid))
+        else {
             return RuntimeExitAction::ClosePane;
         };
 
@@ -306,7 +308,9 @@ impl App {
         let Some((ws_idx, pane_state)) = self.find_pane(pane_id) else {
             return false;
         };
-        let terminal_id = pane_state.attached_terminal_id.clone();
+        let Some(terminal_id) = pane_state.terminal_id().cloned() else {
+            return false;
+        };
         let Some(terminal) = self.state.terminals.get(&terminal_id) else {
             return false;
         };
