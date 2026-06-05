@@ -588,7 +588,7 @@ impl AppState {
                         info.id,
                         row,
                         col,
-                        self.pane_scroll_metrics(terminal_runtimes, info.id),
+                        self.pane_scroll_metrics_any(terminal_runtimes, info.id),
                     ));
                 } else if let Some(info) = self.view.pane_infos.iter().find(|p| {
                     mouse.column >= p.rect.x
@@ -1349,6 +1349,41 @@ impl AppState {
             .and_then(crate::terminal::TerminalRuntime::scroll_metrics)
     }
 
+    /// Synthesize `ScrollMetrics` for a view-typed pane from its current
+    /// `scroll_offset()`, so selection coordinates can reuse the same
+    /// PTY-derived selection machinery. Returns `None` when the pane is
+    /// not a view (callers fall back to PTY metrics).
+    pub(crate) fn view_scroll_metrics_for_pane(
+        &self,
+        pane_id: crate::layout::PaneId,
+    ) -> Option<crate::pane::ScrollMetrics> {
+        let ws_idx = self.active?;
+        let ws = self.workspaces.get(ws_idx)?;
+        let pane = ws.pane_state(pane_id)?;
+        let crate::pane::PaneAttachment::View(view_state) = pane.attachment() else {
+            return None;
+        };
+        let info = self.pane_info_by_id(pane_id)?;
+        Some(crate::pane::ScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: view_state.kind().scroll_offset() as usize,
+            viewport_rows: info.inner_rect.height as usize,
+        })
+    }
+
+    /// Unified accessor that returns view-synthesized metrics for view
+    /// panes and PTY metrics for terminal panes.
+    pub(crate) fn pane_scroll_metrics_any(
+        &self,
+        terminal_runtimes: &TerminalRuntimeRegistry,
+        pane_id: crate::layout::PaneId,
+    ) -> Option<crate::pane::ScrollMetrics> {
+        if let Some(metrics) = self.view_scroll_metrics_for_pane(pane_id) {
+            return Some(metrics);
+        }
+        self.pane_scroll_metrics(terminal_runtimes, pane_id)
+    }
+
     fn handle_right_click_passthrough(
         &mut self,
         terminal_runtimes: &TerminalRuntimeRegistry,
@@ -1434,6 +1469,9 @@ impl AppState {
 
         if let Some(info) = self.pane_at(mouse.column, mouse.row).cloned() {
             self.focus_pane(info.id);
+            if self.forward_view_pane_mouse(&info, mouse) {
+                return;
+            }
             if self.forward_pane_wheel(terminal_runtimes, &info, mouse) {
                 return;
             }
@@ -1474,6 +1512,28 @@ impl AppState {
         }
     }
 
+    /// Route a mouse event to a view pane's `handle_mouse` if the target
+    /// is a view pane. Returns true when the pane was a view and consumed
+    /// the event (or chose not to handle it, in which case the caller
+    /// still treats it as "view-owned" and stops further PTY routing).
+    fn forward_view_pane_mouse(&mut self, info: &PaneInfo, mouse: MouseEvent) -> bool {
+        let Some(ws_idx) = self.active else {
+            return false;
+        };
+        let Some(pane) = self
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|ws| ws.pane_state_mut(info.id))
+        else {
+            return false;
+        };
+        let crate::pane::PaneAttachment::View(state) = pane.attachment_mut() else {
+            return false;
+        };
+        let _ = state.kind_mut().handle_mouse(&mouse, info.inner_rect);
+        true
+    }
+
     pub(super) fn forward_pane_mouse_button(
         &mut self,
         terminal_runtimes: &TerminalRuntimeRegistry,
@@ -1489,6 +1549,17 @@ impl AppState {
             .and_then(|ws| ws.pane_state_mut(info.id))
         {
             if let crate::pane::PaneAttachment::View(state) = pane.attachment_mut() {
+                // Left-button events on view panes are owned by the
+                // in-app selection machinery — never forward them to the
+                // view's handle_mouse. Other buttons still dispatch.
+                if matches!(
+                    mouse.kind,
+                    MouseEventKind::Down(MouseButton::Left)
+                        | MouseEventKind::Up(MouseButton::Left)
+                        | MouseEventKind::Drag(MouseButton::Left)
+                ) {
+                    return false;
+                }
                 return matches!(
                     state.kind_mut().handle_mouse(&mouse, info.inner_rect),
                     crate::pane::ViewKeyOutcome::Handled
@@ -3134,6 +3205,10 @@ mod tests {
 
     #[test]
     fn forward_pane_mouse_button_dispatches_to_view_kind() {
+        // Left-button events are now owned by the selection machinery, so
+        // forward_pane_mouse_button must NOT call into the view's
+        // handle_mouse for them. Right-click still dispatches, and
+        // forward_pane_mouse_motion still dispatches for Moved.
         let mut app = app_for_mouse_test();
         let mut ws = Workspace::test_new("test");
         let (view_pane, counters) = ws.test_split_view_with_handle(Direction::Horizontal);
@@ -3159,6 +3234,18 @@ mod tests {
                 info.inner_rect.y + 1,
             ),
         );
+        assert!(!handled, "view panes leave Left buttons for selection");
+        assert_eq!(counters.mouse_count(), 0);
+
+        let handled = app.state.forward_pane_mouse_button(
+            &app.terminal_runtimes,
+            &info,
+            mouse(
+                MouseEventKind::Down(MouseButton::Right),
+                info.inner_rect.x + 1,
+                info.inner_rect.y + 1,
+            ),
+        );
         assert!(handled);
         assert_eq!(counters.mouse_count(), 1);
 
@@ -3173,5 +3260,87 @@ mod tests {
         );
         assert!(handled);
         assert_eq!(counters.mouse_count(), 2);
+    }
+
+    #[test]
+    fn down_left_on_view_pane_creates_selection_with_view_metrics() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let (view_pane, _counters) = ws.test_split_view_with_handle(Direction::Horizontal);
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+        let info = pane_infos
+            .iter()
+            .find(|info| info.id == view_pane)
+            .expect("view pane info present")
+            .clone();
+
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.focus_pane(view_pane);
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            info.inner_rect.x + 3,
+            info.inner_rect.y + 4,
+        ));
+
+        let sel = app
+            .state
+            .selection
+            .as_ref()
+            .expect("selection should be anchored on view pane");
+        assert_eq!(sel.pane_id, view_pane);
+        assert!(sel.is_just_click());
+        // Synthesized metrics should be available for the view pane.
+        let metrics = app.state.view_scroll_metrics_for_pane(view_pane);
+        assert!(
+            metrics.is_some(),
+            "view metrics should resolve for view pane"
+        );
+    }
+
+    #[test]
+    fn drag_on_view_pane_advances_selection_to_dragging() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let (view_pane, _counters) = ws.test_split_view_with_handle(Direction::Horizontal);
+        let pane_infos = ws.tabs[0].layout.panes(Rect::new(26, 2, 80, 18));
+        let info = pane_infos
+            .iter()
+            .find(|info| info.id == view_pane)
+            .expect("view pane info present")
+            .clone();
+
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.focus_pane(view_pane);
+        app.state.mode = Mode::Terminal;
+        app.state.view.pane_infos = pane_infos;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            info.inner_rect.x + 1,
+            info.inner_rect.y + 1,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            info.inner_rect.x + 5,
+            info.inner_rect.y + 3,
+        ));
+
+        let sel = app
+            .state
+            .selection
+            .as_ref()
+            .expect("selection should exist after drag");
+        assert!(sel.is_dragging(), "drag should activate selection");
+        let ((sr, _), (er, _)) = sel.ordered_cells();
+        // Anchored at viewport row 1, dragged to viewport row 3.
+        assert_eq!(sr, 1);
+        assert_eq!(er, 3);
     }
 }

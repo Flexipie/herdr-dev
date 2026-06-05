@@ -528,6 +528,28 @@ impl Workspace {
         )
     }
 
+    /// Split a non-PTY view pane off the given target. Returns the new
+    /// pane id and the tab index it landed in. Returns `None` if
+    /// `pane_id` doesn't resolve to a tab in this workspace.
+    pub fn split_pane_view(
+        &mut self,
+        pane_id: PaneId,
+        direction: Direction,
+        kind: Box<dyn crate::pane::ViewKind>,
+        focus_new_pane: bool,
+    ) -> Option<(usize, PaneId)> {
+        let tab_idx = self.find_tab_index_for_pane(pane_id)?;
+        let tab = &mut self.tabs[tab_idx];
+        let previous_focus = tab.layout.focused();
+        tab.layout.focus_pane(pane_id);
+        let new_pane_id = tab.split_focused_view(direction, kind);
+        if !focus_new_pane {
+            tab.layout.focus_pane(previous_focus);
+        }
+        self.register_new_pane(new_pane_id);
+        Some((tab_idx, new_pane_id))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn split_pane_argv_command(
         &mut self,
@@ -879,9 +901,18 @@ impl Workspace {
         &mut self,
         direction: Direction,
     ) -> (PaneId, crate::pane::TestPlaceholderViewHandle) {
+        let (view, handle) = crate::pane::TestPlaceholderView::new();
+        let id = self.test_split_view_with(direction, view);
+        (id, handle)
+    }
+
+    pub(crate) fn test_split_view_with(
+        &mut self,
+        direction: Direction,
+        view: crate::pane::TestPlaceholderView,
+    ) -> PaneId {
         let tab = self.active_tab_mut().expect("workspace must have tab");
         let new_id = tab.layout.split_focused(direction);
-        let (view, handle) = crate::pane::TestPlaceholderView::new();
         tab.panes.insert(
             new_id,
             crate::pane::PaneState {
@@ -892,7 +923,7 @@ impl Workspace {
             },
         );
         self.register_new_pane(new_id);
-        (new_id, handle)
+        new_id
     }
 
     pub(crate) fn test_add_tab(&mut self, name: Option<&str>) -> usize {

@@ -239,6 +239,7 @@ fn pane_split(args: &[String]) -> std::io::Result<i32> {
             direction,
             cwd,
             focus,
+            view_kind: None,
         }),
     })?)
 }

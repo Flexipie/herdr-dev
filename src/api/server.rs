@@ -295,6 +295,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::AgentFocus(_) => "agent.focus",
         Method::AgentStart(_) => "agent.start",
         Method::PaneSplit(_) => "pane.split",
+        Method::PaneConvertToView(_) => "pane.convert_to_view",
         Method::PaneList(_) => "pane.list",
         Method::PaneGet(_) => "pane.get",
         Method::PaneRename(_) => "pane.rename",

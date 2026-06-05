@@ -539,6 +539,7 @@ impl App {
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             session_dirty: false,
             terminal_runtime_shutdowns: Vec::new(),
+            last_files_changed_seq: 0,
         };
 
         state.terminals = restored_terminals;
@@ -2593,8 +2594,12 @@ mod tests {
         assert_eq!(tab.workspace_id, workspace.workspace_id);
         assert_eq!(root_pane.workspace_id, workspace.workspace_id);
         assert_eq!(root_pane.tab_id, tab.tab_id);
-        assert!(root_pane.terminal_id.starts_with("term_"));
-        assert_ne!(root_pane.terminal_id, root_pane.pane_id);
+        let terminal_id = root_pane
+            .terminal_id
+            .as_deref()
+            .expect("pty root pane has a terminal_id");
+        assert!(terminal_id.starts_with("term_"));
+        assert_ne!(terminal_id, root_pane.pane_id);
     }
 
     #[test]
@@ -2907,6 +2912,7 @@ mod tests {
                 direction: crate::api::schema::SplitDirection::Right,
                 cwd: None,
                 focus: false,
+                view_kind: None,
             }),
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -2985,6 +2991,7 @@ mod tests {
                 direction: crate::api::schema::SplitDirection::Right,
                 cwd: None,
                 focus: true,
+                view_kind: None,
             }),
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();

@@ -2943,6 +2943,9 @@ impl HeadlessServer {
             self.app.start_git_status_refresh_if_due(now);
         }
 
+        let hub = self.app.event_hub.clone();
+        self.app.state.handle_workspace_files_changed_sweep(&hub);
+
         if self
             .app
             .next_auto_update_check

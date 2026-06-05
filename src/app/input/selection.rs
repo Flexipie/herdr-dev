@@ -16,7 +16,7 @@ impl AppState {
         let Some(info) = self.pane_info_by_id(pane_id).cloned() else {
             return;
         };
-        let metrics = self.pane_scroll_metrics(terminal_runtimes, pane_id);
+        let metrics = self.pane_scroll_metrics_any(terminal_runtimes, pane_id);
         if let Some(selection) = self.selection.as_mut() {
             selection.drag(screen_col, screen_row, info.inner_rect, metrics);
         }
@@ -55,7 +55,7 @@ impl AppState {
             // cell than the anchor's screen position.
             let (ar, ac) = s.anchor_screen_pos(
                 info.inner_rect,
-                self.pane_scroll_metrics(terminal_runtimes, s.pane_id),
+                self.pane_scroll_metrics_any(terminal_runtimes, s.pane_id),
             );
             ar != screen_row || ac != screen_col
         });

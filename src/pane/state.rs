@@ -4,11 +4,7 @@ use crate::terminal::TerminalId;
 /// What's attached to a pane: a live PTY terminal, or a non-PTY view kind
 /// (diff / file / tree / ...).
 pub enum PaneAttachment {
-    Pty {
-        terminal_id: TerminalId,
-    },
-    // PR #2: no production constructor yet; PR #3 wires up real view kinds.
-    #[allow(dead_code)]
+    Pty { terminal_id: TerminalId },
     View(ViewPaneState),
 }
 
@@ -26,6 +22,13 @@ impl PaneState {
     pub fn new_pty(terminal_id: TerminalId) -> Self {
         Self {
             attachment: PaneAttachment::Pty { terminal_id },
+            seen: true,
+        }
+    }
+
+    pub fn new_view(kind: Box<dyn crate::pane::ViewKind>) -> Self {
+        Self {
+            attachment: PaneAttachment::View(ViewPaneState::new(kind)),
             seen: true,
         }
     }

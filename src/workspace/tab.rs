@@ -309,6 +309,19 @@ impl Tab {
         )
     }
 
+    /// Split off a non-PTY view pane. Mirrors `split_focused` but installs
+    /// the supplied `ViewKind` instead of spawning a terminal runtime.
+    pub fn split_focused_view(
+        &mut self,
+        direction: Direction,
+        kind: Box<dyn crate::pane::ViewKind>,
+    ) -> PaneId {
+        let new_id = self.layout.split_focused(direction);
+        self.panes.insert(new_id, PaneState::new_view(kind));
+        self.zoomed = false;
+        new_id
+    }
+
     pub fn split_focused_argv_command(
         &mut self,
         direction: Direction,

@@ -1,11 +1,11 @@
 use bytes::Bytes;
 
 use crate::api::schema::{
-    EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams, PaneListParams,
-    PaneReadParams, PaneReadResult, PaneReleaseAgentParams, PaneRenameParams,
-    PaneReportAgentParams, PaneReportAgentSessionParams, PaneReportMetadataParams,
-    PaneSendInputParams, PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneTarget,
-    ReadFormat, ReadSource, ResponseResult,
+    DiffScopeWire, EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams,
+    PaneConvertToViewParams, PaneListParams, PaneReadParams, PaneReadResult,
+    PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
+    PaneReportMetadataParams, PaneSendInputParams, PaneSendKeysParams, PaneSendTextParams,
+    PaneSplitParams, PaneTarget, ReadFormat, ReadSource, ResponseResult, ViewKindSpec,
 };
 use crate::app::{App, Mode};
 
@@ -20,6 +20,11 @@ impl App {
         let Some((ws_idx, target_pane_id)) = self.parse_pane_id(&params.target_pane_id) else {
             return pane_not_found(id, &params.target_pane_id);
         };
+
+        if let Some(view_spec) = params.view_kind.clone() {
+            return self.handle_pane_split_view(id, ws_idx, target_pane_id, view_spec, &params);
+        }
+
         let (rows, cols) = self.state.estimate_pane_size();
         let split_cwd = params.cwd.map(std::path::PathBuf::from).or_else(|| {
             let follow_cwd = self.state.workspaces.get(ws_idx).and_then(|ws| {
@@ -75,7 +80,9 @@ impl App {
         let pane = self.pane_info(ws_idx, new_pane.pane_id).unwrap();
         self.emit_event(EventEnvelope {
             event: EventKind::PaneCreated,
-            data: EventData::PaneCreated { pane: pane.clone() },
+            data: EventData::PaneCreated {
+                pane: Box::new(pane.clone()),
+            },
         });
 
         encode_success(id, ResponseResult::PaneInfo { pane })
@@ -485,6 +492,144 @@ impl App {
         }
 
         encode_success(id, ResponseResult::Ok {})
+    }
+
+    fn handle_pane_split_view(
+        &mut self,
+        id: String,
+        ws_idx: usize,
+        target_pane_id: crate::layout::PaneId,
+        view_spec: ViewKindSpec,
+        params: &PaneSplitParams,
+    ) -> String {
+        let follow_cwd = self.state.workspaces.get(ws_idx).and_then(|ws| {
+            let tab_idx = ws.find_tab_index_for_pane(target_pane_id)?;
+            ws.tabs.get(tab_idx)?.cwd_for_pane(
+                target_pane_id,
+                &self.state.terminals,
+                &self.terminal_runtimes,
+            )
+        });
+        let view_cwd = params
+            .cwd
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .or(follow_cwd)
+            .unwrap_or_else(|| {
+                self.state
+                    .workspaces
+                    .get(ws_idx)
+                    .map(|ws| ws.identity_cwd.clone())
+                    .unwrap_or_else(|| std::path::PathBuf::from("/"))
+            });
+        let kind = match build_view_kind(&view_spec, &view_cwd) {
+            Ok(kind) => kind,
+            Err((code, message)) => return encode_error(id, &code, message),
+        };
+        let direction = match params.direction {
+            crate::api::schema::SplitDirection::Right => ratatui::layout::Direction::Horizontal,
+            crate::api::schema::SplitDirection::Down => ratatui::layout::Direction::Vertical,
+        };
+        let previous_focus = self.state.current_pane_focus_target();
+        let Some(ws) = self.state.workspaces.get_mut(ws_idx) else {
+            return pane_not_found(id, &params.target_pane_id);
+        };
+        let Some((target_tab_idx, new_pane_id)) =
+            ws.split_pane_view(target_pane_id, direction, kind, params.focus)
+        else {
+            return pane_not_found(id, &params.target_pane_id);
+        };
+        if params.focus {
+            self.state.switch_workspace_tab(ws_idx, target_tab_idx);
+            self.state
+                .record_pane_focus_change(previous_focus, ws_idx, new_pane_id);
+            self.state.mode = Mode::Terminal;
+        }
+        self.schedule_session_save();
+        let pane = self.pane_info(ws_idx, new_pane_id).unwrap();
+        self.emit_event(EventEnvelope {
+            event: EventKind::PaneCreated,
+            data: EventData::PaneCreated {
+                pane: Box::new(pane.clone()),
+            },
+        });
+        encode_success(id, ResponseResult::PaneInfo { pane })
+    }
+
+    pub(super) fn handle_pane_convert_to_view(
+        &mut self,
+        id: String,
+        params: PaneConvertToViewParams,
+    ) -> String {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane.pane_id) else {
+            return pane_not_found(id, &params.pane.pane_id);
+        };
+        let cwd = self.state.workspaces.get(ws_idx).and_then(|ws| {
+            let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
+            ws.tabs.get(tab_idx)?.cwd_for_pane(
+                pane_id,
+                &self.state.terminals,
+                &self.terminal_runtimes,
+            )
+        });
+        let cwd = cwd.unwrap_or_else(|| {
+            self.state
+                .workspaces
+                .get(ws_idx)
+                .map(|ws| ws.identity_cwd.clone())
+                .unwrap_or_else(|| std::path::PathBuf::from("/"))
+        });
+        let kind = match build_view_kind(&params.kind, &cwd) {
+            Ok(kind) => kind,
+            Err((code, message)) => return encode_error(id, &code, message),
+        };
+        if !self.state.convert_pane_to_view(ws_idx, pane_id, kind) {
+            return encode_error(
+                id,
+                "pane_convert_failed",
+                format!("could not convert pane {}", params.pane.pane_id),
+            );
+        }
+        let pane = self.pane_info(ws_idx, pane_id).unwrap();
+        encode_success(id, ResponseResult::PaneInfo { pane })
+    }
+}
+
+/// Resolve a wire `ViewKindSpec` against a real cwd into a live
+/// `Box<dyn ViewKind>`. Returns an `(error_code, message)` tuple when the
+/// underlying repo state can't satisfy the request (e.g. no baseline
+/// branch).
+fn build_view_kind(
+    spec: &ViewKindSpec,
+    cwd: &std::path::Path,
+) -> Result<Box<dyn crate::pane::ViewKind>, (String, String)> {
+    match spec {
+        ViewKindSpec::Diff(diff) => {
+            let scope = diff.scope.map(diff_scope_from_wire);
+            let Some(options) = crate::pane::view::diff::DiffViewOptions::resolve(
+                cwd,
+                diff.baseline.clone(),
+                scope,
+            ) else {
+                return Err((
+                    "diff_no_baseline".to_string(),
+                    "no main/master branch found and no explicit baseline supplied".to_string(),
+                ));
+            };
+            Ok(Box::new(crate::pane::view::diff::DiffView::new(
+                cwd.to_path_buf(),
+                options,
+            )))
+        }
+    }
+}
+
+fn diff_scope_from_wire(wire: DiffScopeWire) -> crate::pane::view::diff::DiffScope {
+    match wire {
+        DiffScopeWire::All => crate::pane::view::diff::DiffScope::All,
+        DiffScopeWire::Unstaged => crate::pane::view::diff::DiffScope::Unstaged,
+        DiffScopeWire::Staged => crate::pane::view::diff::DiffScope::Staged,
+        DiffScopeWire::Committed => crate::pane::view::diff::DiffScope::Committed,
     }
 }
 

@@ -68,6 +68,8 @@ pub enum Method {
     AgentStart(AgentStartParams),
     #[serde(rename = "pane.split")]
     PaneSplit(PaneSplitParams),
+    #[serde(rename = "pane.convert_to_view")]
+    PaneConvertToView(PaneConvertToViewParams),
     #[serde(rename = "pane.list")]
     PaneList(PaneListParams),
     #[serde(rename = "pane.get")]
@@ -272,6 +274,54 @@ pub struct PaneSplitParams {
     pub cwd: Option<String>,
     #[serde(default)]
     pub focus: bool,
+    /// When set, the new pane is installed as a view pane of this kind
+    /// instead of spawning a PTY.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_kind: Option<ViewKindSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneConvertToViewParams {
+    pub pane: PaneTarget,
+    pub kind: ViewKindSpec,
+}
+
+/// Wire-level description of a view-pane kind. Currently only `diff` is
+/// supported; the tagged form leaves room for `file`, `tree`, ... in
+/// later PRs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ViewKindSpec {
+    Diff(DiffSpec),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DiffSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<DiffScopeWire>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffScopeWire {
+    All,
+    Unstaged,
+    Staged,
+    Committed,
+}
+
+/// Reported back in `PaneInfo`: a pane is either a PTY or a view kind.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PaneKindWire {
+    #[default]
+    Pty,
+    View {
+        kind_id: String,
+        options: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -839,7 +889,10 @@ pub struct AgentInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaneInfo {
     pub pane_id: String,
-    pub terminal_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<String>,
+    #[serde(default)]
+    pub kind: PaneKindWire,
     pub workspace_id: String,
     pub tab_id: String,
     pub focused: bool,
@@ -996,7 +1049,7 @@ pub enum EventData {
         workspace_id: String,
     },
     PaneCreated {
-        pane: PaneInfo,
+        pane: Box<PaneInfo>,
     },
     PaneClosed {
         pane_id: String,
@@ -1505,7 +1558,8 @@ mod tests {
                 },
                 root_pane: PaneInfo {
                     pane_id: "w_1-1".into(),
-                    terminal_id: "term_1".into(),
+                    terminal_id: Some("term_1".into()),
+                    kind: PaneKindWire::Pty,
                     workspace_id: "w_1".into(),
                     tab_id: "w_1:1".into(),
                     focused: true,
@@ -1556,7 +1610,8 @@ mod tests {
                 },
                 root_pane: PaneInfo {
                     pane_id: "w_1-3".into(),
-                    terminal_id: "term_example".into(),
+                    terminal_id: Some("term_example".into()),
+                    kind: PaneKindWire::Pty,
                     workspace_id: "w_1".into(),
                     tab_id: "w_1:2".into(),
                     focused: false,
@@ -1595,6 +1650,138 @@ mod tests {
         let json = serde_json::to_string(&response).unwrap();
         let restored: ErrorResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, response);
+    }
+
+    #[test]
+    fn pane_split_params_defaults_view_kind_to_none() {
+        let json = r#"
+        {
+            "id": "req_split",
+            "method": "pane.split",
+            "params": {
+                "target_pane_id": "p_1",
+                "direction": "right"
+            }
+        }
+        "#;
+        let request: Request = serde_json::from_str(json).unwrap();
+        let Method::PaneSplit(params) = request.method else {
+            panic!("wrong method parsed");
+        };
+        assert!(params.view_kind.is_none());
+    }
+
+    #[test]
+    fn pane_split_with_diff_view_kind_round_trips() {
+        let request = Request {
+            id: "req_split".into(),
+            method: Method::PaneSplit(PaneSplitParams {
+                workspace_id: None,
+                target_pane_id: "p_1".into(),
+                direction: SplitDirection::Right,
+                cwd: None,
+                focus: false,
+                view_kind: Some(ViewKindSpec::Diff(DiffSpec {
+                    baseline: Some("main".into()),
+                    scope: None,
+                })),
+            }),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        let restored: Request = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, request);
+    }
+
+    #[test]
+    fn pane_convert_to_view_round_trips() {
+        let request = Request {
+            id: "req_convert".into(),
+            method: Method::PaneConvertToView(PaneConvertToViewParams {
+                pane: PaneTarget {
+                    pane_id: "p_1".into(),
+                },
+                kind: ViewKindSpec::Diff(DiffSpec {
+                    baseline: Some("master".into()),
+                    scope: Some(DiffScopeWire::Unstaged),
+                }),
+            }),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["method"], "pane.convert_to_view");
+        let restored: Request = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, request);
+    }
+
+    #[test]
+    fn pane_info_round_trips_for_both_kinds() {
+        let pty = PaneInfo {
+            pane_id: "p_1".into(),
+            terminal_id: Some("term_1".into()),
+            kind: PaneKindWire::Pty,
+            workspace_id: "w_1".into(),
+            tab_id: "w_1:1".into(),
+            focused: true,
+            cwd: None,
+            foreground_cwd: None,
+            label: None,
+            agent: None,
+            title: None,
+            display_agent: None,
+            agent_status: AgentStatus::Unknown,
+            custom_status: None,
+            state_labels: HashMap::new(),
+            agent_session: None,
+            revision: 0,
+        };
+        let json = serde_json::to_string(&pty).unwrap();
+        let restored: PaneInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, pty);
+
+        let view = PaneInfo {
+            pane_id: "p_2".into(),
+            terminal_id: None,
+            kind: PaneKindWire::View {
+                kind_id: "diff".into(),
+                options: serde_json::json!({"baseline": "main", "scope": "all"}),
+            },
+            workspace_id: "w_1".into(),
+            tab_id: "w_1:1".into(),
+            focused: false,
+            cwd: None,
+            foreground_cwd: None,
+            label: None,
+            agent: None,
+            title: None,
+            display_agent: None,
+            agent_status: AgentStatus::Unknown,
+            custom_status: None,
+            state_labels: HashMap::new(),
+            agent_session: None,
+            revision: 0,
+        };
+        let json = serde_json::to_string(&view).unwrap();
+        let restored: PaneInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, view);
+    }
+
+    #[test]
+    fn legacy_pane_info_without_kind_field_loads_as_pty() {
+        // Older clients/snapshots may not include `kind` or `terminal_id`
+        // as Option<String>. The defaulted-field shape must still
+        // deserialize.
+        let json = r#"
+        {
+            "pane_id": "p_legacy",
+            "workspace_id": "w_1",
+            "tab_id": "w_1:1",
+            "focused": true,
+            "agent_status": "unknown",
+            "revision": 0
+        }
+        "#;
+        let restored: PaneInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(restored.kind, PaneKindWire::Pty);
+        assert!(restored.terminal_id.is_none());
     }
 
     #[test]

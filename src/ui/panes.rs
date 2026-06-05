@@ -337,6 +337,21 @@ pub(super) fn render_panes(
                     frame,
                     info.inner_rect,
                     info.is_focused && terminal_active,
+                    &app.palette,
+                );
+                let metrics = crate::pane::ScrollMetrics {
+                    offset_from_bottom: 0,
+                    max_offset_from_bottom: view_state.kind().scroll_offset() as usize,
+                    viewport_rows: info.inner_rect.height as usize,
+                };
+                render_selection_highlight(
+                    &app.selection,
+                    frame,
+                    info.id,
+                    info.inner_rect,
+                    Some(metrics),
+                    &app.palette,
+                    app.host_terminal_theme,
                 );
             }
             (crate::pane::PaneAttachment::Pty { .. }, None) => {

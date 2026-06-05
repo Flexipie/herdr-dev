@@ -300,36 +300,65 @@ impl App {
     ) -> Option<crate::api::schema::PaneInfo> {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane = ws.pane_state(pane_id)?;
-        let terminal = self.state.terminals.get(pane.terminal_id()?)?;
         let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
         let focused = self.state.active == Some(ws_idx)
             && ws.active_tab == tab_idx
             && ws
                 .focused_pane_id()
                 .is_some_and(|focused| focused == pane_id);
-        let presentation = terminal.effective_presentation();
-        Some(crate::api::schema::PaneInfo {
-            pane_id: self.public_pane_id(ws_idx, pane_id)?,
-            terminal_id: terminal.id.to_string(),
-            workspace_id: self.public_workspace_id(ws_idx),
-            tab_id: self.public_tab_id(ws_idx, tab_idx)?,
-            focused,
-            cwd: ws.tabs[tab_idx]
-                .cwd_for_pane(pane_id, &self.state.terminals, &self.terminal_runtimes)
-                .map(|cwd| cwd.display().to_string()),
-            foreground_cwd: ws.tabs[tab_idx]
-                .foreground_cwd_for_pane(pane_id, &self.terminal_runtimes)
-                .map(|cwd| cwd.display().to_string()),
-            label: terminal.manual_label.clone(),
-            agent: terminal.effective_agent_label().map(str::to_string),
-            title: presentation.title,
-            display_agent: presentation.display_agent,
-            agent_status: pane_agent_status(terminal.state, pane.seen),
-            custom_status: presentation.custom_status,
-            state_labels: presentation.state_labels,
-            agent_session: terminal_agent_session_info(terminal),
-            revision: terminal.revision,
-        })
+
+        match pane.attachment() {
+            crate::pane::PaneAttachment::Pty { .. } => {
+                let terminal = self.state.terminals.get(pane.terminal_id()?)?;
+                let presentation = terminal.effective_presentation();
+                Some(crate::api::schema::PaneInfo {
+                    pane_id: self.public_pane_id(ws_idx, pane_id)?,
+                    terminal_id: Some(terminal.id.to_string()),
+                    kind: crate::api::schema::PaneKindWire::Pty,
+                    workspace_id: self.public_workspace_id(ws_idx),
+                    tab_id: self.public_tab_id(ws_idx, tab_idx)?,
+                    focused,
+                    cwd: ws.tabs[tab_idx]
+                        .cwd_for_pane(pane_id, &self.state.terminals, &self.terminal_runtimes)
+                        .map(|cwd| cwd.display().to_string()),
+                    foreground_cwd: ws.tabs[tab_idx]
+                        .foreground_cwd_for_pane(pane_id, &self.terminal_runtimes)
+                        .map(|cwd| cwd.display().to_string()),
+                    label: terminal.manual_label.clone(),
+                    agent: terminal.effective_agent_label().map(str::to_string),
+                    title: presentation.title,
+                    display_agent: presentation.display_agent,
+                    agent_status: pane_agent_status(terminal.state, pane.seen),
+                    custom_status: presentation.custom_status,
+                    state_labels: presentation.state_labels,
+                    agent_session: terminal_agent_session_info(terminal),
+                    revision: terminal.revision,
+                })
+            }
+            crate::pane::PaneAttachment::View(view_state) => {
+                let kind = view_state.kind();
+                let (kind_id, options) = kind.wire_descriptor();
+                Some(crate::api::schema::PaneInfo {
+                    pane_id: self.public_pane_id(ws_idx, pane_id)?,
+                    terminal_id: None,
+                    kind: crate::api::schema::PaneKindWire::View { kind_id, options },
+                    workspace_id: self.public_workspace_id(ws_idx),
+                    tab_id: self.public_tab_id(ws_idx, tab_idx)?,
+                    focused,
+                    cwd: Some(ws.identity_cwd.display().to_string()),
+                    foreground_cwd: None,
+                    label: Some(kind.title().into_owned()),
+                    agent: None,
+                    title: None,
+                    display_agent: None,
+                    agent_status: crate::api::schema::AgentStatus::Idle,
+                    custom_status: None,
+                    state_labels: std::collections::HashMap::new(),
+                    agent_session: None,
+                    revision: 0,
+                })
+            }
+        }
     }
 
     pub(super) fn lookup_runtime(

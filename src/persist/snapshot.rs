@@ -9,7 +9,7 @@ use crate::terminal::TerminalRuntimeRegistry;
 use crate::workspace::Workspace;
 
 /// Current snapshot format version.
-pub(super) const SNAPSHOT_VERSION: u32 = 3;
+pub(super) const SNAPSHOT_VERSION: u32 = 4;
 
 /// Serializable snapshot of the entire herdr session.
 #[derive(Serialize, Deserialize)]
@@ -99,6 +99,22 @@ pub struct PaneSnapshot {
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    /// When set, this pane was a non-PTY view kind at snapshot time and
+    /// should be rehydrated as one. `None` means PTY (the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<PaneKindSnapshot>,
+}
+
+/// Persisted view-pane shape. PTY panes carry no extra state; view panes
+/// store the kind discriminator and a freeform JSON options blob.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PaneKindSnapshot {
+    Pty,
+    View {
+        kind_id: String,
+        options: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,6 +365,13 @@ fn capture_tab(
                         }
                     })
                 });
+        let kind = tab.panes.get(id).and_then(|pane| match pane.attachment() {
+            crate::pane::PaneAttachment::Pty { .. } => None,
+            crate::pane::PaneAttachment::View(state) => {
+                let (kind_id, options) = state.kind().wire_descriptor();
+                Some(PaneKindSnapshot::View { kind_id, options })
+            }
+        });
         panes.insert(
             id.raw(),
             PaneSnapshot {
@@ -357,6 +380,7 @@ fn capture_tab(
                 agent_name,
                 agent_session,
                 launch_argv,
+                kind,
             },
         );
     }
@@ -583,6 +607,49 @@ mod tests {
     }
 
     #[test]
+    fn pane_snapshot_without_kind_field_loads_as_pty() {
+        // Older snapshots predate the `kind` field. They must still
+        // deserialize and round-trip as PTY (kind = None).
+        let json = r#"
+        {
+            "cwd": "/tmp/legacy",
+            "label": null,
+            "agent_name": null,
+            "agent_session": null,
+            "launch_argv": null
+        }
+        "#;
+        let restored: PaneSnapshot = serde_json::from_str(json).unwrap();
+        assert!(restored.kind.is_none());
+        assert_eq!(restored.cwd, PathBuf::from("/tmp/legacy"));
+    }
+
+    #[test]
+    fn pane_snapshot_view_kind_round_trips() {
+        let snap = PaneSnapshot {
+            cwd: PathBuf::from("/tmp/diff"),
+            label: None,
+            agent_name: None,
+            agent_session: None,
+            launch_argv: None,
+            kind: Some(PaneKindSnapshot::View {
+                kind_id: "diff".into(),
+                options: serde_json::json!({"baseline": "main", "scope": "all"}),
+            }),
+        };
+        let json = serde_json::to_string(&snap).unwrap();
+        let restored: PaneSnapshot = serde_json::from_str(&json).unwrap();
+        match restored.kind {
+            Some(PaneKindSnapshot::View { kind_id, options }) => {
+                assert_eq!(kind_id, "diff");
+                assert_eq!(options["baseline"], "main");
+                assert_eq!(options["scope"], "all");
+            }
+            other => panic!("expected View kind, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn round_trip_full_workspace_snapshot() {
         let mut panes = HashMap::new();
         panes.insert(
@@ -593,6 +660,7 @@ mod tests {
                 agent_name: None,
                 agent_session: None,
                 launch_argv: None,
+                kind: None,
             },
         );
         panes.insert(
@@ -603,6 +671,7 @@ mod tests {
                 agent_name: None,
                 agent_session: None,
                 launch_argv: None,
+                kind: None,
             },
         );
 
@@ -1131,6 +1200,7 @@ mod tests {
                 agent_name: None,
                 agent_session: None,
                 launch_argv: None,
+                kind: None,
             },
         );
         panes.insert(
@@ -1143,6 +1213,7 @@ mod tests {
                 agent_name: None,
                 agent_session: None,
                 launch_argv: None,
+                kind: None,
             },
         );
 

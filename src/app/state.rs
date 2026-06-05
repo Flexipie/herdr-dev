@@ -1333,6 +1333,10 @@ pub struct AppState {
     /// Terminal runtimes that should be shut down by the app/runtime layer
     /// after state has detached their terminal metadata.
     pub(crate) terminal_runtime_shutdowns: Vec<crate::terminal::TerminalId>,
+    /// Sequence cursor for the workspace.files_changed sweep that pushes
+    /// updates into live view panes. Not persisted across restarts — the
+    /// hub is reset on every server start.
+    pub(crate) last_files_changed_seq: u64,
 }
 
 impl AppState {
@@ -1641,6 +1645,7 @@ impl AppState {
             host_terminal_theme: TerminalTheme::default(),
             session_dirty: false,
             terminal_runtime_shutdowns: Vec::new(),
+            last_files_changed_seq: 0,
         }
     }
 

@@ -1185,6 +1185,79 @@ impl AppState {
             .and_then(|pane| pane.terminal_id().cloned())
     }
 
+    /// Drain `workspace.files_changed` events from the hub and forward
+    /// each batch's paths to every view pane in the matching workspace.
+    /// Called from the headless tick loop after each scheduled refresh
+    /// pass so view panes pick up filesystem changes without a dedicated
+    /// poll thread.
+    pub(crate) fn handle_workspace_files_changed_sweep(&mut self, hub: &crate::api::EventHub) {
+        let events = hub.events_after(self.last_files_changed_seq);
+        if events.is_empty() {
+            return;
+        }
+        let mut by_workspace: std::collections::HashMap<String, Vec<std::path::PathBuf>> =
+            std::collections::HashMap::new();
+        for (seq, envelope) in events {
+            self.last_files_changed_seq = self.last_files_changed_seq.max(seq);
+            if let crate::api::schema::EventData::WorkspaceFilesChanged {
+                workspace_id,
+                paths,
+                ..
+            } = envelope.data
+            {
+                by_workspace
+                    .entry(workspace_id)
+                    .or_default()
+                    .extend(paths.into_iter().map(std::path::PathBuf::from));
+            }
+        }
+        if by_workspace.is_empty() {
+            return;
+        }
+        for ws in &mut self.workspaces {
+            let Some(paths) = by_workspace.get(&ws.id) else {
+                continue;
+            };
+            for tab in &mut ws.tabs {
+                for pane in tab.panes.values_mut() {
+                    if let crate::pane::PaneAttachment::View(state) = pane.attachment_mut() {
+                        state.kind_mut().on_files_changed(paths);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Replace a pane's PTY attachment with a view-pane attachment.
+    /// Builds the view kind eagerly (so a failure leaves the PTY intact),
+    /// then swaps the attachment and enqueues the terminal for the same
+    /// async shutdown queue used by `close_pane`. Returns true on success.
+    pub(crate) fn convert_pane_to_view(
+        &mut self,
+        ws_idx: usize,
+        pane_id: PaneId,
+        kind: Box<dyn crate::pane::ViewKind>,
+    ) -> bool {
+        let Some(ws) = self.workspaces.get_mut(ws_idx) else {
+            return false;
+        };
+        let Some(pane) = ws.pane_state_mut(pane_id) else {
+            return false;
+        };
+        let prev_terminal_id = match pane.attachment() {
+            crate::pane::PaneAttachment::Pty { terminal_id } => Some(terminal_id.clone()),
+            crate::pane::PaneAttachment::View(_) => return false,
+        };
+        *pane.attachment_mut() =
+            crate::pane::PaneAttachment::View(crate::pane::ViewPaneState::new(kind));
+        pane.seen = true;
+        if let Some(terminal_id) = prev_terminal_id {
+            self.remove_unattached_terminal_ids([terminal_id]);
+        }
+        self.mark_session_dirty();
+        true
+    }
+
     pub(crate) fn remove_unattached_terminal_ids(
         &mut self,
         terminal_ids: impl IntoIterator<Item = crate::terminal::TerminalId>,
@@ -1660,9 +1733,19 @@ impl AppState {
             _ => return,
         };
 
-        let text = self
-            .runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, sel.pane_id)
-            .and_then(|rt| rt.extract_selection(&sel));
+        let text = match self
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.pane_state(sel.pane_id))
+            .map(|pane| pane.attachment())
+        {
+            Some(crate::pane::PaneAttachment::View(view_state)) => {
+                view_state.kind().extract_selection(&sel)
+            }
+            _ => self
+                .runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, sel.pane_id)
+                .and_then(|rt| rt.extract_selection(&sel)),
+        };
         if let Some(text) = text {
             if !text.is_empty() {
                 self.request_clipboard_write = Some(text.into_bytes());
@@ -4019,6 +4102,89 @@ mod tests {
     }
 
     #[test]
+    fn convert_pane_to_view_swaps_attachment_and_evicts_terminal() {
+        let mut state = app_with_workspaces(&["test"]);
+        state.ensure_test_terminals();
+        let pane_id = state.workspaces[0].test_split(Direction::Horizontal);
+        state.ensure_test_terminals();
+        let pane_count_before = state.workspaces[0].panes.len();
+        let terminal_id = state.terminal_id_for_pane(0, pane_id).unwrap();
+        assert!(state.terminals.contains_key(&terminal_id));
+
+        let (view, _handle) = crate::pane::TestPlaceholderView::new();
+        let ok = state.convert_pane_to_view(0, pane_id, Box::new(view));
+        assert!(ok);
+        assert_eq!(state.workspaces[0].panes.len(), pane_count_before);
+
+        let pane = state.workspaces[0].pane_state(pane_id).unwrap();
+        assert!(matches!(
+            pane.attachment(),
+            crate::pane::PaneAttachment::View(_)
+        ));
+        assert!(!state.terminals.contains_key(&terminal_id));
+    }
+
+    #[test]
+    fn workspace_files_changed_sweep_dispatches_to_matching_view_pane() {
+        let mut state = app_with_workspaces(&["test"]);
+        let (_pane_id, handle) =
+            state.workspaces[0].test_split_view_with_handle(Direction::Horizontal);
+        let workspace_id = state.workspaces[0].id.clone();
+        let hub = crate::api::EventHub::default();
+        hub.push(crate::api::schema::EventEnvelope {
+            event: crate::api::schema::EventKind::WorkspaceFilesChanged,
+            data: crate::api::schema::EventData::WorkspaceFilesChanged {
+                workspace_id: workspace_id.clone(),
+                paths: vec!["src/lib.rs".into()],
+                kind: crate::api::schema::FilesChangedKind {
+                    modified: true,
+                    created: false,
+                    deleted: false,
+                    renamed: false,
+                },
+            },
+        });
+
+        state.handle_workspace_files_changed_sweep(&hub);
+        assert_eq!(handle.files_changed_count(), 1);
+        assert!(state.last_files_changed_seq >= 1);
+
+        // Second sweep with no new events must not double-dispatch.
+        state.handle_workspace_files_changed_sweep(&hub);
+        assert_eq!(handle.files_changed_count(), 1);
+    }
+
+    #[test]
+    fn workspace_files_changed_sweep_skips_other_workspaces() {
+        let mut state = app_with_workspaces(&["a", "b"]);
+        let (_pane_id, handle_a) =
+            state.workspaces[0].test_split_view_with_handle(Direction::Horizontal);
+        let (_pane_id_b, handle_b) =
+            state.workspaces[1].test_split_view_with_handle(Direction::Horizontal);
+        let workspace_id_a = state.workspaces[0].id.clone();
+        let hub = crate::api::EventHub::default();
+        hub.push(crate::api::schema::EventEnvelope {
+            event: crate::api::schema::EventKind::WorkspaceFilesChanged,
+            data: crate::api::schema::EventData::WorkspaceFilesChanged {
+                workspace_id: workspace_id_a,
+                paths: vec!["src/lib.rs".into()],
+                kind: crate::api::schema::FilesChangedKind::default(),
+            },
+        });
+        state.handle_workspace_files_changed_sweep(&hub);
+        assert_eq!(handle_a.files_changed_count(), 1);
+        assert_eq!(handle_b.files_changed_count(), 0);
+    }
+
+    #[test]
+    fn convert_pane_to_view_returns_false_for_view_pane() {
+        let mut state = app_with_workspaces(&["test"]);
+        let pane_id = state.workspaces[0].test_split_view(Direction::Horizontal);
+        let (view, _handle) = crate::pane::TestPlaceholderView::new();
+        assert!(!state.convert_pane_to_view(0, pane_id, Box::new(view)));
+    }
+
+    #[test]
     fn close_workspace_removes_unattached_terminal_states() {
         let mut state = app_with_workspaces(&["one", "two"]);
         let terminal_id = state
@@ -4136,5 +4302,32 @@ mod tests {
         assert!(!deferred);
         assert_eq!(state.workspaces.len(), 1);
         assert_eq!(state.workspaces[0].display_name(), "notes");
+    }
+
+    #[test]
+    fn copy_selection_on_view_pane_writes_extracted_text() {
+        let mut state = AppState::test_new();
+        let mut ws = Workspace::test_new("test");
+        let view = crate::pane::TestPlaceholderView::new()
+            .0
+            .with_selection_text("hello-from-view");
+        let view_pane = ws.test_split_view_with(Direction::Horizontal, view);
+
+        state.workspaces.push(ws);
+        state.active = Some(0);
+        state.mode = Mode::Terminal;
+
+        // Build a Dragging selection so finish() returns true.
+        let mut sel = crate::selection::Selection::anchor(view_pane, 0, 0, None);
+        sel.drag(5, 2, ratatui::layout::Rect::new(0, 0, 80, 24), None);
+        state.selection = Some(sel);
+
+        let runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+        state.copy_selection(&runtimes);
+
+        assert_eq!(
+            state.request_clipboard_write.as_deref(),
+            Some(b"hello-from-view".as_ref())
+        );
     }
 }

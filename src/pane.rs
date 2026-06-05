@@ -27,21 +27,19 @@ mod kitty_keyboard;
 mod osc;
 mod state;
 mod terminal;
-mod view;
+pub mod view;
 mod xtgettcap;
 
 use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
 pub(crate) use self::terminal::{TerminalDirtyPatch, TerminalDirtyPatchOutcome};
+#[cfg(test)]
+pub(crate) use self::view::{TestPlaceholderView, TestPlaceholderViewHandle};
+pub use self::view::{ViewKeyOutcome, ViewPaneState};
 pub use self::{
     state::{PaneAttachment, PaneState},
     terminal::{InputState, ScrollMetrics, TerminalCursorState},
     view::ViewKind,
 };
-// Reserved for PR #3 callers.
-#[cfg(test)]
-pub(crate) use self::view::{TestPlaceholderView, TestPlaceholderViewHandle};
-#[allow(unused_imports)]
-pub use self::view::{ViewKeyOutcome, ViewPaneState};
 
 const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::from_secs(1);
 const PANE_TERM: &str = "xterm-256color";

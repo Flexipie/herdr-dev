@@ -413,6 +413,23 @@ fn restore_tab(
             }
         };
 
+        // View panes restore without spawning a runtime. A failure to
+        // rebuild the kind (e.g. saved baseline branch no longer exists)
+        // falls back to a PTY so the pane slot isn't lost.
+        if let Some(super::snapshot::PaneKindSnapshot::View { kind_id, options }) =
+            saved_pane.and_then(|p| p.kind.as_ref())
+        {
+            if let Some(view) = restore_view_kind(kind_id, options, &cwd) {
+                panes.insert(*id, PaneState::new_view(view));
+                continue;
+            }
+            warn!(
+                pane_id = id.raw(),
+                kind_id = kind_id.as_str(),
+                "failed to restore view pane, falling back to PTY"
+            );
+        }
+
         let saved_label = saved_pane.and_then(|p| p.label.clone());
         let saved_agent_name = saved_pane.and_then(|p| p.agent_name.clone());
         let saved_launch_argv = saved_pane.and_then(|p| p.launch_argv.clone());
@@ -660,6 +677,37 @@ fn restore_plan_for_snapshot(
     }
     let persisted = persisted_agent_session_from_snapshot(session)?;
     crate::agent_resume::plan(&session.source, &session.agent, &persisted.session_ref)
+}
+
+fn restore_view_kind(
+    kind_id: &str,
+    options: &serde_json::Value,
+    cwd: &std::path::Path,
+) -> Option<Box<dyn crate::pane::ViewKind>> {
+    match kind_id {
+        "diff" => {
+            let baseline = options
+                .get("baseline")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let scope = options
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .and_then(|s| match s {
+                    "all" => Some(crate::pane::view::diff::DiffScope::All),
+                    "unstaged" => Some(crate::pane::view::diff::DiffScope::Unstaged),
+                    "staged" => Some(crate::pane::view::diff::DiffScope::Staged),
+                    "committed" => Some(crate::pane::view::diff::DiffScope::Committed),
+                    _ => None,
+                });
+            let opts = crate::pane::view::diff::DiffViewOptions::resolve(cwd, baseline, scope)?;
+            Some(Box::new(crate::pane::view::diff::DiffView::new(
+                cwd.to_path_buf(),
+                opts,
+            )))
+        }
+        _ => None,
+    }
 }
 
 fn persisted_agent_session_from_snapshot(
@@ -1040,6 +1088,7 @@ mod tests {
                                 value: "opencode-session".into(),
                             }),
                             launch_argv: None,
+                            kind: None,
                         },
                     )]),
                     zoomed: false,
@@ -1116,6 +1165,7 @@ mod tests {
                                 value: "codex-session".into(),
                             }),
                             launch_argv: None,
+                            kind: None,
                         },
                     )]),
                     zoomed: false,
@@ -1282,6 +1332,7 @@ mod tests {
                 agent_name: None,
                 agent_session: None,
                 launch_argv: None,
+                kind: None,
             },
         );
         let history = SessionHistorySnapshot {
